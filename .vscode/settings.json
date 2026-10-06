@@ -36,7 +36,7 @@
     "python.testing.pytestEnabled": true,
     "python.testing.unittestEnabled": false,
     "python.testing.pytestArgs": [
-        "src",
+        "tests",
         // don't swallow print() from passing tests -- the test explorer only
         // ever shows what pytest itself writes out
         "-rP"

@@ -42,6 +42,7 @@ byname = { path = "../byname", editable = true }
 src = ["src"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 addopts = ["--strict-markers"]
 markers = ["slow: seconds, not milliseconds -- skip with -m 'not slow'"]
 
