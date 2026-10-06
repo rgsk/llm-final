@@ -1,0 +1,44 @@
+import pytest
+import torch
+from torch import Tensor
+
+from data import get_batch, split
+
+
+@pytest.fixture
+def ids():
+    return torch.arange(100)
+
+
+def test_split_sizes(ids: Tensor):
+    (train=, val=) = split(ids)
+    assert (len(train), len(val)) == (90, 10)
+
+
+def test_split_rejoins_in_order(ids: Tensor):
+    (train=, val=) = split(ids, frac=0.75)
+    assert torch.equal(torch.cat([train, val]), ids)
+
+
+def test_batch_shape(ids: Tensor):
+    x, y = get_batch(ids, batch_size=4, block_size=8)
+    assert x.shape == y.shape == (4, 8)
+    assert x.dtype == y.dtype == ids.dtype
+
+
+def test_y_is_x_shifted_by_one(ids: Tensor):
+    x, y = get_batch(ids, batch_size=16, block_size=8)
+    assert torch.equal(y[:, :-1], x[:, 1:])
+    assert torch.equal(y, x + 1)  # only works because ids is arange
+
+
+def test_rows_are_contiguous_slices(ids: Tensor):
+    x, _ = get_batch(ids, batch_size=16, block_size=8)
+    assert torch.equal(x - x[:, :1], torch.arange(8).expand(16, 8))
+
+
+def test_windows_stay_inside(ids: Tensor):
+    torch.manual_seed(0)
+    _, y = get_batch(ids, batch_size=1000, block_size=99)
+    assert y.max() == 99
+    assert torch.equal(y, torch.arange(1, 100).expand(1000, 99))

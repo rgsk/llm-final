@@ -1,0 +1,30 @@
+import torch
+from torch import Tensor
+
+
+def split(ids: Tensor, *, frac: float = 0.9):
+    n = int(frac * len(ids))
+    return (train=ids[:n], val=ids[n:])
+
+
+def get_batch(d: Tensor, *, batch_size: int, block_size: int, device: str = "cpu"):
+    ix = torch.randint(len(d) - block_size, (batch_size,))
+    x = torch.stack([d[i : i + block_size] for i in ix])
+    y = torch.stack([d[i + 1 : i + 1 + block_size] for i in ix])
+    return (x := x.to(device), y := y.to(device))
+
+
+if __name__ == "__main__":
+    from paths import SHAKESPEARE
+    from tokenizer import CharTokenizer
+
+    torch.manual_seed(1)
+    text = SHAKESPEARE.read_text()
+    tok = CharTokenizer(text)
+    ids = torch.tensor(tok.encode(text), dtype=torch.long)
+    (train=, val=) = split(ids)
+    print(f"train {len(train):,}  val {len(val):,}")
+
+    x, y = get_batch(train, batch_size=2, block_size=16)
+    for xs, ys in zip(x.tolist(), y.tolist()):
+        print(f"x {tok.decode(xs)!r}\ny {tok.decode(ys)!r}\n")
