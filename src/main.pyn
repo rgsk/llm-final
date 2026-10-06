@@ -13,6 +13,8 @@ from train import TrainConfig, train
 if __name__ == "__main__":
     torch.manual_seed(1337)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # tf32: float32 matmuls on tensor cores, rounding inputs to 10 mantissa bits
+    torch.set_float32_matmul_precision("high")
     text = SHAKESPEARE.read_text()
     tok = CharTokenizer(text)
     ids = torch.tensor(tok.encode(text), dtype=torch.long)  # [N]

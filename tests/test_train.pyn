@@ -8,7 +8,14 @@ from torch import Tensor
 
 from data import get_batch, split
 from model import GPT, GPTConfig
-from train import TrainConfig, batch_loss, full_val_loss, sampled_train_loss, train
+from train import (
+    TrainConfig,
+    autocast,
+    batch_loss,
+    full_val_loss,
+    sampled_train_loss,
+    train,
+)
 
 
 def test_untrained_loss_is_uniform_guess(model: GPT, cfg: GPTConfig, ids: Tensor):
@@ -30,6 +37,31 @@ def test_batch_loss_is_mean_over_every_position(
     ]
     expected = torch.stack(per_position).mean()  # []
     assert batch_loss(model, x, y).item() == pytest.approx(expected.item(), rel=1e-5)
+
+
+def test_autocast_is_off_on_cpu(model: GPT, cfg: GPTConfig):
+    x = torch.randint(cfg.vocab_size, (2, cfg.block_size), device="cpu")  # [B, T]
+    with autocast(x.device):
+        assert model(x).dtype == torch.float32
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="bf16 autocast is GPU-only")
+def test_batch_loss_runs_in_bf16_on_gpu(model: GPT, cfg: GPTConfig, ids: Tensor):
+    model.to("cuda")
+    x, y = get_batch(ids, batch_size=16, block_size=cfg.block_size, device="cuda")
+    # record the dtype the logits come out in, inside batch_loss
+    logit_dtypes: list[torch.dtype] = []
+    model.lm_head.register_forward_hook(
+        lambda _module, _inputs, out: logit_dtypes.append(out.dtype)
+    )
+    loss = batch_loss(model, x, y)
+    assert logit_dtypes == [torch.bfloat16]
+    # same forward without autocast: fp32 throughout
+    logits = model(x)  # [B, T, V]
+    B, T, V = logits.shape
+    fp32_loss = F.cross_entropy(logits.view(B * T, V), y.view(B * T))  # []
+    # bf16 keeps 8 mantissa bits: ~2-3 significant digits
+    assert loss.item() == pytest.approx(fp32_loss.item(), rel=1e-2)
 
 
 def test_full_val_loss_is_batch_loss_over_all_windows(

@@ -1,5 +1,6 @@
 # losses, evaluation and the training loop
 import math
+import time
 from pathlib import Path
 
 import torch
@@ -16,14 +17,25 @@ type TrainConfig = (
 )
 
 
+def autocast(device: torch.device):
+    # bf16 on GPU, chosen per op: matmuls (attention included) run in bf16,
+    # layer norm and the loss in fp32, and the stored weights stay fp32.
+    # bf16 has fp32's exponent range, so gradients don't underflow: no GradScaler.
+    # off on CPU, where bf16 is slower
+    return torch.autocast(
+        device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
+    )
+
+
 def batch_loss(model: GPT, x: Tensor, y: Tensor) -> Tensor:
     # x: [B, T]
     # y: [B, T]
     # out: []
     # mean next-token cross-entropy over all B*T positions
-    logits = model(x)  # [B, T, V]
-    B, T, V = logits.shape
-    return F.cross_entropy(logits.view(B * T, V), y.view(B * T))
+    with autocast(x.device):
+        logits = model(x)  # [B, T, V]
+        B, T, V = logits.shape
+        return F.cross_entropy(logits.view(B * T, V), y.view(B * T))
 
 
 @torch.no_grad()
@@ -87,6 +99,7 @@ def train(
     opt = torch.optim.AdamW(model.parameters(), lr=)
     history: list[(step: int, train_loss: float, val_loss: float)] = []
     best_val_loss = math.inf
+    start = time.perf_counter()
 
     def evaluate(step: int):
         nonlocal best_val_loss
@@ -96,8 +109,11 @@ def train(
         val_loss = full_val_loss(model, val_data, batch_size=)
         history.append((step=, train_loss=, val_loss=))
         is_best = val_loss < best_val_loss
+        # elapsed includes evaluation; .item() above already waited for the GPU
+        elapsed = time.perf_counter() - start
         print(
             f"step {step:>5}  train {train_loss:.3f}  val {val_loss:.3f}"
+            + f"  {elapsed:6.1f}s"
             + ("  *" if is_best else "")
         )
         if is_best:
