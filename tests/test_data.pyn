@@ -1,3 +1,5 @@
+# split and get_batch, on arange data: each id equals its position, so a slice's
+# values show exactly where it was cut from
 import pytest
 import torch
 from torch import Tensor
@@ -7,41 +9,44 @@ from data import get_batch, split
 
 @pytest.fixture
 def ids():
-    return torch.arange(100)
+    return torch.arange(100)  # [100]: 0, 1, ..., 99
 
 
 def test_split_sizes(ids: Tensor):
-    (train=, val=) = split(ids)
+    (train=, val=) = split(ids)  # [90], [10]
     assert (len(train), len(val)) == (90, 10)
 
 
 def test_split_rejoins_in_order(ids: Tensor):
-    (train=, val=) = split(ids, frac=0.75)
-    assert torch.equal(torch.cat([train, val]), ids)
+    (train=, val=) = split(ids, frac=0.75)  # [75], [25]
+    assert torch.equal(torch.cat([train, val]), ids)  # no shuffle, overlap or loss
 
 
 def test_batch_shape(ids: Tensor):
-    x, y = get_batch(ids, batch_size=4, block_size=8)
+    x, y = get_batch(ids, batch_size=4, block_size=8)  # each [4, 8]
     assert x.shape == y.shape == (4, 8)
     assert x.dtype == y.dtype == ids.dtype
 
 
 def test_y_is_x_shifted_by_one(ids: Tensor):
-    x, y = get_batch(ids, batch_size=16, block_size=8)
+    x, y = get_batch(ids, batch_size=16, block_size=8)  # each [16, 8]
     assert torch.equal(y[:, :-1], x[:, 1:])
-    assert torch.equal(y, x + 1)  # only works because ids is arange
+    assert torch.equal(y, x + 1)  # arange: the next id is always the current id + 1
 
 
 def test_rows_are_contiguous_slices(ids: Tensor):
-    x, _ = get_batch(ids, batch_size=16, block_size=8)
-    first = x[:, :1]
+    x, _ = get_batch(ids, batch_size=16, block_size=8)  # [16, 8]
+    # each row is its first id followed by the next 7
+    first = x[:, :1]  # [16, 1]
     assert torch.equal(x, first + torch.arange(8))
 
 
 def test_windows_stay_inside(ids: Tensor):
+    # block_size = N - 1 leaves exactly one valid start (0), so all 1000 samples
+    # must be that window; reading past the end would break this
     block_size = len(ids) - 1
-    only_x, only_y = ids[:-1], ids[1:]
-    x, y = get_batch(ids, batch_size=1000, block_size=block_size)
+    only_x, only_y = ids[:-1], ids[1:]  # each [99]
+    x, y = get_batch(ids, batch_size=1000, block_size=block_size)  # each [1000, 99]
     assert torch.equal(x, only_x.expand_as(x))
     assert torch.equal(y, only_y.expand_as(y))
 

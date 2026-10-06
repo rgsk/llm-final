@@ -1,0 +1,123 @@
+# losses, evaluation and the training loop
+import torch
+import torch.nn.functional as F
+from torch import Tensor
+
+from data import get_batch
+from model import GPT
+
+type TrainConfig = (
+    batch_size: int, max_steps: int, lr: float, eval_interval: int, eval_iters: int
+)
+
+
+def batch_loss(model: GPT, x: Tensor, y: Tensor) -> Tensor:
+    # x: [B, T]
+    # y: [B, T]
+    # out: []
+    # mean next-token cross-entropy over all B*T positions
+    logits = model(x)  # [B, T, V]
+    B, T, V = logits.shape
+    return F.cross_entropy(logits.view(B * T, V), y.view(B * T))
+
+
+@torch.no_grad()
+def val_loss(model: GPT, val: Tensor, *, batch_size: int) -> float:
+    # val: [N]
+    # exact loss over the whole val split: back-to-back windows, no sampling
+    was_training = model.training
+    model.eval()
+    device = next(model.parameters()).device
+    T = model.block_size
+    # -1: the last window's targets need one id past its inputs
+    n_windows = (len(val) - 1) // T
+    assert n_windows > 0, f"val has {len(val)} ids, need more than block_size {T}"
+    xs = val[: n_windows * T].view(n_windows, T)  # [W, T]
+    ys = val[1 : n_windows * T + 1].view(n_windows, T)  # [W, T]
+    # summed on the device: no host sync per batch
+    total = torch.tensor(0.0, device=device)
+    count = 0
+    for i in range(0, n_windows, batch_size):
+        x = xs[i : i + batch_size].to(device)  # [b, T]
+        y = ys[i : i + batch_size].to(device)  # [b, T]
+        # weight by token count so a smaller last batch doesn't skew the mean
+        total += batch_loss(model, x, y) * y.numel()
+        count += y.numel()
+    model.train(was_training)  # restore the caller's mode
+    return (total / count).item()
+
+
+@torch.no_grad()
+def train_loss_est(model: GPT, train: Tensor, *, batch_size: int, iters: int) -> float:
+    # train: [N]
+    # the train split is too big for a full pass: average a few random batches
+    was_training = model.training
+    model.eval()
+    device = next(model.parameters()).device
+    losses: list[Tensor] = []
+    for _ in range(iters):
+        x, y = get_batch(
+            train, batch_size=batch_size, block_size=model.block_size, device=device
+        )
+        losses.append(batch_loss(model, x, y))
+    model.train(was_training)
+    return torch.stack(losses).mean().item()  # one sync, not one per batch
+
+
+def train(
+    model: GPT,
+    (train=train_ids, val=val_ids): (train: Tensor, val: Tensor),
+    (batch_size=, max_steps=, lr=, eval_interval=, eval_iters=): TrainConfig,
+):
+    # AdamW at a constant lr; evaluate every eval_interval steps and once at the end
+    device = next(model.parameters()).device
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    history: list[(step: int, train: float, val: float)] = []
+
+    def evaluate(step: int):
+        train = train_loss_est(model, train_ids, batch_size=, iters=eval_iters)
+        val = val_loss(model, val_ids, batch_size=)
+        history.append((step=, train=, val=))
+        print(f"step {step:>5}  train {train:.3f}  val {val:.3f}")
+
+    model.train()
+    for step in range(max_steps):
+        if step % eval_interval == 0:
+            evaluate(step)
+        x, y = get_batch(
+            train_ids, batch_size=, block_size=model.block_size, device=device
+        )
+        loss = batch_loss(model, x, y)
+        # zero, backprop, update: grads accumulate otherwise
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    evaluate(max_steps)
+    return history
+
+
+if __name__ == "__main__":
+    import math
+
+    from data import split
+    from paths import SHAKESPEARE
+    from tokenizer import CharTokenizer
+
+    torch.manual_seed(1337)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    text = SHAKESPEARE.read_text()
+    tok = CharTokenizer(text)
+    ids = torch.tensor(tok.encode(text), dtype=torch.long)  # [N]
+    data = split(ids)
+
+    gpt_cfg = (
+        vocab_size=tok.vocab_size, block_size=64, n_embed=128, n_head=4, n_layer=4
+    )
+    train_cfg: TrainConfig = (
+        batch_size=32, max_steps=500, lr=3e-3, eval_interval=100, eval_iters=20
+    )
+    model = GPT(gpt_cfg).to(device)
+    # the step-0 val loss should start near ln(V), then fall
+    print(f"{device}  uniform loss {math.log(tok.vocab_size):.3f}")
+    history = train(model, data, train_cfg)
+    print(f"val {history[0].val:.3f} -> {history[-1].val:.3f}")

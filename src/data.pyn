@@ -1,3 +1,4 @@
+# token id stream -> train/val split and random next-token training batches
 import torch
 from torch import Tensor
 
@@ -5,22 +6,29 @@ from torch import Tensor
 def split(ids: Tensor, *, frac: float = 0.9):
     # ids: [N]
     # out: train [n], val [N - n]
+    # split by position, not shuffled: val is the tail of the text, never trained on
     n = int(frac * len(ids))
     return (train=ids[:n], val=ids[n:])
 
 
-def get_batch(ids: Tensor, *, batch_size: int, block_size: int, device: str = "cpu"):
+def get_batch(
+    ids: Tensor,
+    *,
+    batch_size: int,
+    block_size: int,
+    device: str | torch.device = "cpu",
+):
     # ids: [N]
     # out: x, y each [B, T]
     assert len(ids) > block_size, (
         f"need more than block_size {block_size} ids, got {len(ids)}"
     )
+    # random window starts; the last start still leaves room for block_size targets
     ix = torch.randint(len(ids) - block_size, (batch_size,))  # [B]
     x = torch.stack([ids[i : i + block_size] for i in ix])  # [B, T]
-    y = torch.stack([ids[i + 1 : i + 1 + block_size] for i in ix])
-    x = x.to(device)
-    y = y.to(device)
-    return x, y
+    # targets are x shifted one token left: y[b, t] is the next token after x[b, t]
+    y = torch.stack([ids[i + 1 : i + 1 + block_size] for i in ix])  # [B, T]
+    return (x := x.to(device), y := y.to(device))
 
 
 if __name__ == "__main__":
@@ -34,6 +42,7 @@ if __name__ == "__main__":
     (train=, val=) = split(ids)
     print(f"train {len(train):,}  val {len(val):,}")
 
+    # show a batch as text: each y row is its x row shifted by one char
     x, y = get_batch(train, batch_size=2, block_size=16)  # each [B, T]
     for xr, yr in zip(x, y):
         print(f"x {tok.decode(xr.tolist())!r}\ny {tok.decode(yr.tolist())!r}\n")

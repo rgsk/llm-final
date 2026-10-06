@@ -1,3 +1,5 @@
+# character-level tokenizer: one id per distinct character of the training text.
+# no unknown token, so encode() raises KeyError on a character it never saw
 from __future__ import annotations
 
 from pathlib import Path
@@ -5,8 +7,9 @@ from pathlib import Path
 
 class CharTokenizer:
     def __init__(self, text: str):
+        # id -> char, sorted so the same text always gives the same ids
         self.itoc = sorted(set(text))
-        self.ctoi = {c: i for i, c in enumerate(self.itoc)}
+        self.ctoi = {c: i for i, c in enumerate(self.itoc)}  # char -> id
 
     @classmethod
     def from_file(cls, path: str | Path) -> CharTokenizer:
@@ -31,6 +34,7 @@ if __name__ == "__main__":
     print(f"{len(text):,} chars  vocab_size {tok.vocab_size}")
     print(f"vocab: {''.join(tok.itoc)!r}")
 
+    # round trip: decode(encode(s)) == s for any text made of vocab chars
     sample = "First Citizen:\nBefore we proceed"
     ids = tok.encode(sample)
     print(f"{sample!r}\n -> {ids}\n -> {tok.decode(ids)!r}")

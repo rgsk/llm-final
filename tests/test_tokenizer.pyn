@@ -1,3 +1,4 @@
+# CharTokenizer: vocab order, ids, round trip, unseen characters
 from pathlib import Path
 
 import pytest
@@ -12,13 +13,14 @@ def tok():
 
 
 def test_vocab_is_sorted_distinct_chars(tok: CharTokenizer):
+    # repeated "l" and "o" appear once; " " sorts before letters
     assert tok.itoc == [" ", "d", "e", "h", "l", "o", "r", "w"]
     assert tok.vocab_size == 8
 
 
 def test_ids_follow_sorted_order(tok: CharTokenizer):
     assert tok.encode(" dehlorw") == list(range(8))
-    assert tok.encode("hello") == [3, 2, 4, 4, 5]
+    assert tok.encode("hello") == [3, 2, 4, 4, 5]  # h=3 e=2 l=4 o=5
 
 
 @pytest.mark.parametrize("s", ["", "h", "hello world", "world hello  ", "lll"])
@@ -40,6 +42,6 @@ def test_from_file_matches_text(tmp_path: Path):
 def test_shakespeare():
     text = SHAKESPEARE.read_text()
     tok = CharTokenizer(text)
-    assert tok.vocab_size == 65
+    assert tok.vocab_size == 65  # letters, digit 3, punctuation, space, newline
     head = text[:10_000]
     assert tok.decode(tok.encode(head)) == head

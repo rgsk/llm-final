@@ -1,3 +1,5 @@
+# GPT (nanoGPT layout): token + position embeddings -> n_layer pre-norm blocks
+# (causal self-attention + MLP) -> final norm -> lm head tied to the token embedding
 import math
 from typing import TYPE_CHECKING
 
@@ -11,6 +13,7 @@ type GPTConfig = (
 )
 
 
+# a Linear whose output is added to the residual stream; marker for GPT._init_weights
 class ResidualProj(nn.Linear):
     pass
 
@@ -28,11 +31,15 @@ class FlashAttention(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, T, E]
         # out: [B, T, E]
+        # project to Q, K, V in one matmul, then split into heads
         qkv: Tensor = self.qkv(x)  # [B, T, 3E]
         q, k, v = rearrange(  # each [B, nh, T, hs]
             qkv, "B T (three nh hs) -> three B nh T hs", three=3, nh=self.n_head
         )
+        # fused causal attention (flash kernel on GPU): never materializes the
+        # [B, nh, T, T] score matrix; default scale is 1/sqrt(hs)
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # [B, nh, T, hs]
+        # merge heads, then out proj to mix head information
         out = rearrange(out, "B nh T hs -> B T (nh hs)")  # [B, T, E]
         return self.proj(out)
 
@@ -46,6 +53,7 @@ class FeedForward(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, T, E]
         # out: [B, T, E]
+        # position-wise MLP: expand to 4E, nonlinearity, project back
         h: Tensor = self.up(x)  # [B, T, 4E]
         h = F.relu(h)
         return self.down(h)  # [B, T, E]
@@ -62,10 +70,11 @@ class Block(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, T, E]
         # out: [B, T, E]
+        # pre-norm residuals: x + sublayer(norm(x)), so x itself is never normalized
         h: Tensor = self.ln1(x)
-        x = x + self.attn(h)
+        x = x + self.attn(h)  # tokens exchange information
         h = self.ln2(x)
-        x = x + self.ffwd(h)
+        x = x + self.ffwd(h)  # each token processed on its own
         return x
 
 
@@ -85,13 +94,17 @@ class GPT(nn.Module):
         self.ln_f = nn.LayerNorm(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size, bias=False)
         self.apply(self._init_weights)
+        # weight tying: one [V, E] matrix both embeds tokens and scores them
         self.lm_head.weight = self.token_embedding_table.weight
 
     def _init_weights(self, module: nn.Module) -> None:
+        # GPT-2 init: Linear and Embedding weights ~ N(0, 0.02), zero biases
         with torch.no_grad():
             if isinstance(module, nn.Linear):
                 std = 0.02
                 if isinstance(module, ResidualProj):
+                    # 2 residual adds per block: scale so the stream's variance
+                    # doesn't grow with depth
                     std /= math.sqrt(2 * self.n_layer)
                 module.weight.normal_(mean=0.0, std=std)
                 if module.bias is not None:
@@ -103,15 +116,23 @@ class GPT(nn.Module):
         # idx: [B, T]
         # out: [B, T, V]
         _, T = idx.shape
+        # learned absolute positions: there are only block_size of them
+        assert T <= self.block_size, (
+            f"sequence length {T} exceeds block_size {self.block_size}"
+        )
         tok_emb: Tensor = self.token_embedding_table(idx)  # [B, T, E]
         pos = torch.arange(T, device=idx.device)  # [T]
         pos_emb: Tensor = self.position_embedding_table(pos)  # [T, E]
         x: Tensor = tok_emb + pos_emb  # [B, T, E], pos_emb broadcast over B
         for block in self.blocks:
             x = block(x)
+        # final norm, then a score per vocab token at every position:
+        # logits[b, t] predicts the next token after idx[b, t]
         x = self.ln_f(x)
-        return self.lm_head(x)  # [B, T, V]
+        logits: Tensor = self.lm_head(x)  # [B, T, V]
+        return logits
 
+    # nn.Module types model(x) as Any; checker-only, keep in step with forward
     if TYPE_CHECKING:
 
         def __call__(self, idx: Tensor) -> Tensor: ...
@@ -141,5 +162,6 @@ if __name__ == "__main__":
     B, T, V = logits.shape
     loss = F.cross_entropy(logits.view(B * T, V), y.view(B * T))  # []
     print(f"logits {tuple(logits.shape)}")
+    # untrained, so close to a uniform guess over the vocab: loss ≈ ln(V)
     uniform_loss = math.log(tok.vocab_size)
     print(f"initial loss {loss.item():.3f}  vs uniform {uniform_loss:.3f}")

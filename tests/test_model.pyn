@@ -1,3 +1,5 @@
+# GPT top to bottom: output shapes, causality, parameter counts per component,
+# init, and that it can learn at all
 import math
 
 import pytest
@@ -19,27 +21,37 @@ def model(cfg: GPTConfig):
 
 
 def random_ids(cfg: GPTConfig, *, batch_size: int = 3) -> Tensor:
+    # out: [B, T]
     return torch.randint(cfg.vocab_size, (batch_size, cfg.block_size))
 
 
 def test_logits_shape(model: GPT, cfg: GPTConfig):
-    ids = random_ids(cfg, batch_size=3)
-    logits = model(ids)
+    ids = random_ids(cfg, batch_size=3)  # [3, T]
+    logits = model(ids)  # [3, T, V]
     assert logits.shape == (3, cfg.block_size, cfg.vocab_size)
 
 
 def test_shorter_than_block_size(model: GPT, cfg: GPTConfig):
-    ids = random_ids(cfg)[:, :5]
+    ids = random_ids(cfg)[:, :5]  # [3, 5]
     assert model(ids).shape == (3, 5, cfg.vocab_size)
 
 
+def test_longer_than_block_size_fails(model: GPT, cfg: GPTConfig):
+    too_long = torch.zeros(1, cfg.block_size + 1, dtype=torch.long)  # [1, T + 1]
+    with pytest.raises(
+        AssertionError, match="sequence length 17 exceeds block_size 16"
+    ):
+        model(too_long)
+
+
 def test_causal(model: GPT, cfg: GPTConfig):
+    # change the token at pos: logits before pos must not move, the rest must
     pos = 10
-    ids = random_ids(cfg)
+    ids = random_ids(cfg)  # [B, T]
     changed = ids.clone()
     changed[:, pos] = (changed[:, pos] + 1) % cfg.vocab_size
 
-    before, after = model(ids), model(changed)
+    before, after = model(ids), model(changed)  # each [B, T, V]
 
     assert torch.equal(before[:, :pos], after[:, :pos])
     assert not torch.allclose(before[:, pos:], after[:, pos:])
@@ -105,18 +117,20 @@ def test_gpt_params(model: GPT, cfg: GPTConfig):
     position_embedding = T * E
     blocks = L * block_params(E)
     final_norm = layer_norm_params(E)
-    lm_head = 0
+    lm_head = 0  # tied to token_embedding, counted once
     assert n_params(model) == (
         token_embedding + position_embedding + blocks + final_norm + lm_head
     )
 
 
 def test_residual_projections_start_smaller():
+    # wide layers so each weight matrix's sample std lands within 5% of the target
     cfg = (vocab_size=20, block_size=16, n_embed=256, n_head=4, n_layer=8)
     model = GPT(cfg)
     std = 0.02
     residual_std = std / math.sqrt(2 * cfg.n_layer)
     for m in model.modules():
+        # lm_head's weight is the token embedding, initialized by the Embedding branch
         if isinstance(m, nn.Linear) and m is not model.lm_head:
             expected = residual_std if isinstance(m, ResidualProj) else std
             assert m.weight.std().item() == pytest.approx(expected, rel=0.05), m
@@ -124,11 +138,15 @@ def test_residual_projections_start_smaller():
 
 
 def test_overfits_one_batch(model: GPT, cfg: GPTConfig):
-    x, y = random_ids(cfg, batch_size=4), random_ids(cfg, batch_size=4)
+    # random targets have no pattern, so loss -> 0 means the model memorized them:
+    # forward, loss, backward and optimizer step all work end to end
+    x, y = random_ids(cfg, batch_size=4), random_ids(cfg, batch_size=4)  # each [B, T]
     opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
 
     def loss():
-        return F.cross_entropy(model(x).flatten(0, 1), y.flatten())
+        logits = model(x)  # [B, T, V]
+        B, T, V = logits.shape
+        return F.cross_entropy(logits.view(B * T, V), y.view(B * T))  # []
 
     for _ in range(150):
         opt.zero_grad()

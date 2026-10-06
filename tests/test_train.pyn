@@ -1,0 +1,119 @@
+# losses, evaluation and the training loop, on a tiny GPT
+import math
+
+import pytest
+import torch
+import torch.nn.functional as F
+from torch import Tensor
+
+from data import get_batch, split
+from model import GPT, GPTConfig
+from train import TrainConfig, batch_loss, train, train_loss_est, val_loss
+
+
+@pytest.fixture
+def cfg() -> GPTConfig:
+    return (vocab_size=20, block_size=8, n_embed=32, n_head=4, n_layer=2)
+
+
+@pytest.fixture
+def model(cfg: GPTConfig):
+    return GPT(cfg)
+
+
+@pytest.fixture
+def ids(cfg: GPTConfig):
+    # next id is always current + 1 (mod V): trivially learnable
+    return torch.arange(400) % cfg.vocab_size  # [400]: 0, 1, ..., 19, 0, 1, ...
+
+
+def test_untrained_loss_is_uniform_guess(model: GPT, cfg: GPTConfig, ids: Tensor):
+    x, y = get_batch(ids, batch_size=16, block_size=cfg.block_size)  # each [B, T]
+    uniform = math.log(cfg.vocab_size)
+    assert batch_loss(model, x, y).item() == pytest.approx(uniform, abs=0.1)
+
+
+def test_batch_loss_is_mean_over_every_position(
+    model: GPT, cfg: GPTConfig, ids: Tensor
+):
+    x, y = get_batch(ids, batch_size=3, block_size=cfg.block_size)  # each [B, T]
+    logits = model(x)  # [B, T, V]
+    B, T = x.shape
+    per_position = [  # B*T losses, each []
+        F.cross_entropy(logits[b, t], y[b, t])  # [V] vs []
+        for b in range(B)
+        for t in range(T)
+    ]
+    expected = torch.stack(per_position).mean()  # []
+    assert batch_loss(model, x, y).item() == pytest.approx(expected.item(), rel=1e-5)
+
+
+def test_val_loss_is_batch_loss_over_all_windows(
+    model: GPT, cfg: GPTConfig, ids: Tensor
+):
+    val = ids[:100]  # [100]
+    T = cfg.block_size
+    n_windows = (len(val) - 1) // T
+    xs = val[: n_windows * T].view(n_windows, T)  # [W, T]
+    ys = val[1 : n_windows * T + 1].view(n_windows, T)  # [W, T]
+    all_at_once = batch_loss(model, xs, ys).item()
+    assert val_loss(model, val, batch_size=1000) == pytest.approx(all_at_once, rel=1e-5)
+
+
+@pytest.mark.parametrize("batch_size", [1, 3, 5, 12])
+def test_val_loss_does_not_depend_on_batch_size(
+    model: GPT, ids: Tensor, batch_size: int
+):
+    val = ids[:100]  # [100]
+    one_batch = val_loss(model, val, batch_size=1000)
+    assert val_loss(model, val, batch_size=batch_size) == pytest.approx(
+        one_batch, rel=1e-5
+    )
+
+
+def test_val_loss_needs_more_than_one_window(model: GPT, cfg: GPTConfig):
+    too_short = torch.arange(cfg.block_size)  # [T]
+    with pytest.raises(AssertionError, match="need more than block_size 8"):
+        val_loss(model, too_short, batch_size=4)
+
+
+def test_train_loss_est_is_mean_of_random_batches(
+    model: GPT, cfg: GPTConfig, ids: Tensor
+):
+    # same seed twice: draw the exact batches train_loss_est drew
+    torch.manual_seed(0)
+    est = train_loss_est(model, ids, batch_size=4, iters=5)
+    torch.manual_seed(0)
+    batches = [  # 5 x (x, y), each [4, T]
+        get_batch(ids, batch_size=4, block_size=cfg.block_size) for _ in range(5)
+    ]
+    losses = [batch_loss(model, x, y) for x, y in batches]  # 5 x []
+    expected = torch.stack(losses).mean()  # []
+    assert est == pytest.approx(expected.item(), rel=1e-5)
+
+
+@pytest.mark.parametrize("training", [True, False])
+def test_evaluation_restores_mode(model: GPT, ids: Tensor, training: bool):
+    model.train(training)
+    val_loss(model, ids, batch_size=4)
+    assert model.training is training
+    train_loss_est(model, ids, batch_size=4, iters=2)
+    assert model.training is training
+
+
+@pytest.fixture
+def train_cfg() -> TrainConfig:
+    return (batch_size=16, max_steps=60, lr=1e-2, eval_interval=20, eval_iters=5)
+
+
+def test_history_has_one_entry_per_eval(
+    model: GPT, ids: Tensor, train_cfg: TrainConfig
+):
+    history = train(model, split(ids), train_cfg)
+    assert [h.step for h in history] == [0, 20, 40, 60]
+
+
+def test_training_lowers_val_loss(model: GPT, ids: Tensor, train_cfg: TrainConfig):
+    history = train(model, split(ids), train_cfg)
+    first, last = history[0], history[-1]
+    assert last.val < first.val / 2  # starts near ln(20) = 3.0
