@@ -1,10 +1,14 @@
 # losses, evaluation and the training loop
+import math
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from checkpoint import save_checkpoint
 from data import DataSplit, get_batch
-from model import GPT
+from model import GPT, GPTConfig
 
 type TrainConfig = (
     batch_size: int, max_steps: int, lr: float,
@@ -74,18 +78,33 @@ def train(
     model: GPT,
     (train_data=, val_data=): DataSplit,
     (batch_size=, max_steps=, lr=, eval_interval=, eval_iters=): TrainConfig,
+    *,
+    save_best: (path: Path, gpt_cfg: GPTConfig) | None = None,
 ):
-    # AdamW at a constant lr; evaluate every eval_interval steps and once at the end
+    # AdamW at a constant lr; evaluate every eval_interval steps and once at the end.
+    # save_best: checkpoint the model at each new lowest val loss, since val can
+    # rise again before the last step
     opt = torch.optim.AdamW(model.parameters(), lr=)
     history: list[(step: int, train_loss: float, val_loss: float)] = []
+    best_val_loss = math.inf
 
     def evaluate(step: int):
+        nonlocal best_val_loss
         train_loss = sampled_train_loss(
             model, train_data, batch_size=, iters=eval_iters
         )
         val_loss = full_val_loss(model, val_data, batch_size=)
         history.append((step=, train_loss=, val_loss=))
-        print(f"step {step:>5}  train {train_loss:.3f}  val {val_loss:.3f}")
+        is_best = val_loss < best_val_loss
+        print(
+            f"step {step:>5}  train {train_loss:.3f}  val {val_loss:.3f}"
+            + ("  *" if is_best else "")
+        )
+        if is_best:
+            best_val_loss = val_loss
+            if save_best is not None:
+                (path=, gpt_cfg=) = save_best
+                save_checkpoint(path, model, gpt_cfg, step=, val_loss=)
 
     model.train()
     for step in range(max_steps):
@@ -106,8 +125,6 @@ def train(
 
 
 if __name__ == "__main__":
-    import math
-
     from data import split
     from paths import SHAKESPEARE
     from tokenizer import CharTokenizer

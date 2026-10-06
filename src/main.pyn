@@ -1,10 +1,12 @@
-# end to end on tiny shakespeare: tokenize, split, train a GPT, then sample from it
+# end to end on tiny shakespeare: tokenize, split, train a GPT, then sample from
+# the best checkpoint
 import torch
 
+from checkpoint import load_checkpoint
 from data import split
 from generate import generate
 from model import GPT
-from paths import SHAKESPEARE
+from paths import CKPT_DIR, SHAKESPEARE
 from tokenizer import CharTokenizer
 from train import TrainConfig, train
 
@@ -25,7 +27,12 @@ if __name__ == "__main__":
         eval_interval=250, eval_iters=20,
     )
     model = GPT(gpt_cfg).to(device)
-    train(model, data, train_cfg)
+    ckpt_path = CKPT_DIR / "main.pt"
+    train(model, data, train_cfg, save_best=(path=ckpt_path, gpt_cfg=))
+
+    # the best val loss can come before the last step: sample from that model
+    (model=, step=, val_loss=) = load_checkpoint(ckpt_path, device=)
+    print(f"best checkpoint: step {step}, val {val_loss:.3f}")
 
     # start from a single newline; 500 new chars runs well past block_size
     prompt = torch.tensor([tok.encode("\n")], device=)  # [1, 1]

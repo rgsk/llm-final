@@ -1,0 +1,94 @@
+# saving a GPT and rebuilding it from the file alone, and train's save_best
+from pathlib import Path
+
+import pytest
+import torch
+from torch import Tensor
+
+from checkpoint import load_checkpoint, save_checkpoint
+from data import split
+from model import GPT, GPTConfig
+from train import TrainConfig, train
+
+
+@pytest.fixture
+def cfg() -> GPTConfig:
+    return (vocab_size=20, block_size=8, n_embed=32, n_head=4, n_layer=2)
+
+
+@pytest.fixture
+def model(cfg: GPTConfig) -> GPT:
+    return GPT(cfg)
+
+
+@pytest.fixture
+def ckpt_path(tmp_path: Path) -> Path:
+    return tmp_path / "ckpts" / "run.pt"  # ckpts/ doesn't exist yet
+
+
+def test_loaded_model_computes_the_same_logits(
+    model: GPT, cfg: GPTConfig, ckpt_path: Path
+):
+    save_checkpoint(ckpt_path, model, cfg, step=0, val_loss=0.0)
+    (model=loaded) = load_checkpoint(ckpt_path)
+    x = torch.randint(cfg.vocab_size, (2, cfg.block_size))  # [B, T]
+    assert torch.equal(loaded(x), model(x))
+
+
+def test_config_and_metadata_come_back(model: GPT, cfg: GPTConfig, ckpt_path: Path):
+    save_checkpoint(ckpt_path, model, cfg, step=42, val_loss=1.5)
+    (gpt_cfg=, step=, val_loss=) = load_checkpoint(ckpt_path)
+    assert gpt_cfg == cfg
+    assert step == 42
+    assert val_loss == 1.5
+
+
+def test_weight_tying_survives_the_round_trip(
+    model: GPT, cfg: GPTConfig, ckpt_path: Path
+):
+    save_checkpoint(ckpt_path, model, cfg, step=0, val_loss=0.0)
+    (model=loaded) = load_checkpoint(ckpt_path)
+    assert loaded.lm_head.weight is loaded.token_embedding_table.weight
+
+
+def test_saving_again_overwrites_and_leaves_no_temp_file(
+    model: GPT, cfg: GPTConfig, ckpt_path: Path
+):
+    save_checkpoint(ckpt_path, model, cfg, step=1, val_loss=2.0)
+    save_checkpoint(ckpt_path, model, cfg, step=2, val_loss=1.0)
+    (step=) = load_checkpoint(ckpt_path)
+    assert step == 2
+    # save writes run.tmp, then renames it to run.pt: only run.pt should remain
+    files_in_dir = [p.name for p in ckpt_path.parent.iterdir()]
+    assert files_in_dir == ["run.pt"]
+
+
+def test_weights_from_another_config_are_rejected(
+    model: GPT, cfg: GPTConfig, ckpt_path: Path
+):
+    # the saved config is what rebuilds the model; a wrong one fails on load
+    wider = cfg._replace(n_embed=64)
+    save_checkpoint(ckpt_path, model, wider, step=0, val_loss=0.0)
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        load_checkpoint(ckpt_path)
+
+
+@pytest.fixture
+def ids(cfg: GPTConfig) -> Tensor:
+    # next id is always current + 1 (mod V): trivially learnable
+    return torch.arange(400) % cfg.vocab_size  # [400]
+
+
+def test_save_best_keeps_the_lowest_val_loss(
+    model: GPT, cfg: GPTConfig, ids: Tensor, ckpt_path: Path
+):
+    train_cfg: TrainConfig = (
+        batch_size=16, max_steps=60, lr=1e-2, eval_interval=20, eval_iters=5
+    )
+    history = train(
+        model, split(ids), train_cfg, save_best=(path=ckpt_path, gpt_cfg=cfg)
+    )
+    best = min(history, key=lambda h: h.val_loss)
+    (step=, val_loss=) = load_checkpoint(ckpt_path)
+    assert step == best.step
+    assert val_loss == best.val_loss
