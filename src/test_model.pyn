@@ -1,0 +1,145 @@
+import math
+
+import pytest
+import torch
+import torch.nn.functional as F
+from jaxtyping import TypeCheckError
+from torch import Tensor, nn
+
+from model import GPT, FeedForward, FlashAttention, GPTConfig, ResidualProj
+
+
+@pytest.fixture
+def cfg() -> GPTConfig:
+    return (vocab_size=20, block_size=16, n_embed=32, n_head=4, n_layer=2)
+
+
+@pytest.fixture
+def model(cfg: GPTConfig):
+    return GPT(cfg)
+
+
+def random_ids(cfg: GPTConfig, *, batch_size: int = 3) -> Tensor:
+    return torch.randint(cfg.vocab_size, (batch_size, cfg.block_size))
+
+
+def test_logits_shape(model: GPT, cfg: GPTConfig):
+    ids = random_ids(cfg, batch_size=3)
+    logits = model(ids)
+    assert logits.shape == (3, cfg.block_size, cfg.vocab_size)
+
+
+def test_shorter_than_block_size(model: GPT, cfg: GPTConfig):
+    ids = random_ids(cfg)[:, :5]
+    assert model(ids).shape == (3, 5, cfg.vocab_size)
+
+
+def test_causal(model: GPT, cfg: GPTConfig):
+    pos = 10
+    ids = random_ids(cfg)
+    changed = ids.clone()
+    changed[:, pos] = (changed[:, pos] + 1) % cfg.vocab_size
+
+    before, after = model(ids), model(changed)
+
+    assert torch.equal(before[:, :pos], after[:, :pos])
+    assert not torch.allclose(before[:, pos:], after[:, pos:])
+
+
+def n_params(module: nn.Module) -> int:
+    return sum(p.numel() for p in module.parameters())
+
+
+def linear_params(n_in: int, n_out: int, *, bias: bool = True) -> int:
+    return n_in * n_out + (n_out if bias else 0)
+
+
+def attention_params(E: int) -> int:
+    qkv = linear_params(E, 3 * E, bias=False)
+    proj = linear_params(E, E)
+    return qkv + proj
+
+
+def test_attention_params(cfg: GPTConfig):
+    attn = FlashAttention(n_embed=cfg.n_embed, n_head=cfg.n_head)
+    assert n_params(attn) == attention_params(cfg.n_embed)
+
+
+def feed_forward_params(E: int) -> int:
+    up = linear_params(E, 4 * E)
+    down = linear_params(4 * E, E)
+    return up + down
+
+
+def test_feed_forward_params(cfg: GPTConfig):
+    ffwd = FeedForward(n_embed=cfg.n_embed)
+    assert n_params(ffwd) == feed_forward_params(cfg.n_embed)
+
+
+def layer_norm_params(E: int) -> int:
+    weight, bias = E, E
+    return weight + bias
+
+
+def block_params(E: int) -> int:
+    ln1, ln2 = layer_norm_params(E), layer_norm_params(E)
+    return ln1 + attention_params(E) + ln2 + feed_forward_params(E)
+
+
+def test_block_params(model: GPT, cfg: GPTConfig):
+    for block in model.blocks:
+        assert n_params(block) == block_params(cfg.n_embed)
+
+
+def test_lm_head_tied_to_embedding(model: GPT):
+    assert model.lm_head.weight is model.token_embedding_table.weight
+
+
+def test_gpt_params(model: GPT, cfg: GPTConfig):
+    (vocab_size=V, block_size=T, n_embed=E, n_layer=L) = cfg
+    token_embedding = V * E
+    position_embedding = T * E
+    blocks = L * block_params(E)
+    final_norm = layer_norm_params(E)
+    lm_head = 0
+    assert n_params(model) == (
+        token_embedding + position_embedding + blocks + final_norm + lm_head
+    )
+
+
+def test_residual_projections_start_smaller():
+    cfg = (vocab_size=20, block_size=16, n_embed=256, n_head=4, n_layer=8)
+    model = GPT(cfg)
+    std = 0.02
+    residual_std = std / math.sqrt(2 * cfg.n_layer)
+    for m in model.modules():
+        if isinstance(m, nn.Linear) and m is not model.lm_head:
+            expected = residual_std if isinstance(m, ResidualProj) else std
+            assert m.weight.std().item() == pytest.approx(expected, rel=0.05), m
+            assert m.bias is None or not m.bias.any()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param(torch.zeros(16, dtype=torch.long), id="missing-batch-dim"),
+        pytest.param(torch.zeros(2, 16), id="float-ids"),
+    ],
+)
+def test_rejects_wrong_input(model: GPT, bad: Tensor):
+    with pytest.raises(TypeCheckError):
+        model(bad)
+
+
+def test_overfits_one_batch(model: GPT, cfg: GPTConfig):
+    x, y = random_ids(cfg, batch_size=4), random_ids(cfg, batch_size=4)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+
+    def loss():
+        return F.cross_entropy(model(x).flatten(0, 1), y.flatten())
+
+    for _ in range(150):
+        opt.zero_grad()
+        loss().backward()
+        opt.step()
+    assert loss().item() < 0.05

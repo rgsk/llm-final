@@ -32,13 +32,14 @@ def test_unseen_char_raises(tok: CharTokenizer):
 
 
 def test_from_file_matches_text(tmp_path: Path):
-    p = tmp_path / "t.txt"
-    p.write_text("abcab\n")
-    assert CharTokenizer.from_file(p).itoc == CharTokenizer("abcab\n").itoc
+    path = tmp_path / "t.txt"
+    path.write_text("abcab\n")
+    assert CharTokenizer.from_file(path).itoc == CharTokenizer("abcab\n").itoc
 
 
 def test_shakespeare():
     text = SHAKESPEARE.read_text()
     tok = CharTokenizer(text)
     assert tok.vocab_size == 65
-    assert tok.decode(tok.encode(text[:10_000])) == text[:10_000]
+    head = text[:10_000]
+    assert tok.decode(tok.encode(head)) == head

@@ -34,11 +34,13 @@ def test_y_is_x_shifted_by_one(ids: Tensor):
 
 def test_rows_are_contiguous_slices(ids: Tensor):
     x, _ = get_batch(ids, batch_size=16, block_size=8)
-    assert torch.equal(x - x[:, :1], torch.arange(8).expand(16, 8))
+    first = x[:, :1]
+    assert torch.equal(x, first + torch.arange(8))
 
 
 def test_windows_stay_inside(ids: Tensor):
-    torch.manual_seed(0)
-    _, y = get_batch(ids, batch_size=1000, block_size=99)
-    assert y.max() == 99
-    assert torch.equal(y, torch.arange(1, 100).expand(1000, 99))
+    block_size = len(ids) - 1
+    only_x, only_y = ids[:-1], ids[1:]
+    x, y = get_batch(ids, batch_size=1000, block_size=block_size)
+    assert torch.equal(x, only_x.expand_as(x))
+    assert torch.equal(y, only_y.expand_as(y))

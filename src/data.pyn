@@ -26,5 +26,5 @@ if __name__ == "__main__":
     print(f"train {len(train):,}  val {len(val):,}")
 
     x, y = get_batch(train, batch_size=2, block_size=16)
-    for xs, ys in zip(x.tolist(), y.tolist()):
-        print(f"x {tok.decode(xs)!r}\ny {tok.decode(ys)!r}\n")
+    for xr, yr in zip(x, y):
+        print(f"x {tok.decode(xr.tolist())!r}\ny {tok.decode(yr.tolist())!r}\n")
