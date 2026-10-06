@@ -2,13 +2,15 @@
 import torch
 from torch import Tensor
 
+type DataSplit = (train_data: Tensor, val_data: Tensor)
 
-def split(ids: Tensor, *, frac: float = 0.9):
+
+def split(ids: Tensor, *, frac: float = 0.9) -> DataSplit:
     # ids: [N]
-    # out: train [n], val [N - n]
+    # out: train_data [n], val_data [N - n]
     # split by position, not shuffled: val is the tail of the text, never trained on
     n = int(frac * len(ids))
-    return (train=ids[:n], val=ids[n:])
+    return (train_data=ids[:n], val_data=ids[n:])
 
 
 def get_batch(
@@ -39,10 +41,10 @@ if __name__ == "__main__":
     text = SHAKESPEARE.read_text()
     tok = CharTokenizer(text)
     ids = torch.tensor(tok.encode(text), dtype=torch.long)  # [N]
-    (train=, val=) = split(ids)
-    print(f"train {len(train):,}  val {len(val):,}")
+    (train_data=, val_data=) = split(ids)
+    print(f"train {len(train_data):,}  val {len(val_data):,}")
 
     # show a batch as text: each y row is its x row shifted by one char
-    x, y = get_batch(train, batch_size=2, block_size=16)  # each [B, T]
+    x, y = get_batch(train_data, batch_size=2, block_size=16)  # each [B, T]
     for xr, yr in zip(x, y):
         print(f"x {tok.decode(xr.tolist())!r}\ny {tok.decode(yr.tolist())!r}\n")

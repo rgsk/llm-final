@@ -13,13 +13,15 @@ def ids():
 
 
 def test_split_sizes(ids: Tensor):
-    (train=, val=) = split(ids)  # [90], [10]
-    assert (len(train), len(val)) == (90, 10)
+    (train_data=, val_data=) = split(ids)  # [90], [10]
+    assert (len(train_data), len(val_data)) == (90, 10)
 
 
 def test_split_rejoins_in_order(ids: Tensor):
-    (train=, val=) = split(ids, frac=0.75)  # [75], [25]
-    assert torch.equal(torch.cat([train, val]), ids)  # no shuffle, overlap or loss
+    (train_data=, val_data=) = split(ids, frac=0.75)  # [75], [25]
+    assert torch.equal(
+        torch.cat([train_data, val_data]), ids
+    )  # no shuffle, overlap or loss
 
 
 def test_batch_shape(ids: Tensor):
@@ -46,7 +48,7 @@ def test_windows_stay_inside(ids: Tensor):
     # must be that window; reading past the end would break this
     block_size = len(ids) - 1
     only_x, only_y = ids[:-1], ids[1:]  # each [99]
-    x, y = get_batch(ids, batch_size=1000, block_size=block_size)  # each [1000, 99]
+    x, y = get_batch(ids, batch_size=1000, block_size=)  # each [1000, 99]
     assert torch.equal(x, only_x.expand_as(x))
     assert torch.equal(y, only_y.expand_as(y))
 

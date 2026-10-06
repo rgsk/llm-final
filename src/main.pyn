@@ -17,15 +17,17 @@ if __name__ == "__main__":
     data = split(ids)
 
     gpt_cfg = (
-        vocab_size=tok.vocab_size, block_size=128, n_embed=192, n_head=6, n_layer=6
+        vocab_size=tok.vocab_size, block_size=128,
+        n_embed=192, n_head=6, n_layer=6,
     )
     train_cfg: TrainConfig = (
-        batch_size=64, max_steps=2000, lr=1e-3, eval_interval=250, eval_iters=20
+        batch_size=64, max_steps=2000, lr=1e-3,
+        eval_interval=250, eval_iters=20,
     )
     model = GPT(gpt_cfg).to(device)
     train(model, data, train_cfg)
 
     # start from a single newline; 500 new chars runs well past block_size
-    prompt = torch.tensor([tok.encode("\n")], device=device)  # [1, 1]
+    prompt = torch.tensor([tok.encode("\n")], device=)  # [1, 1]
     out = generate(model, prompt, max_new_tokens=500)  # [1, 501]
     print(tok.decode(out[0].tolist()))

@@ -9,7 +9,8 @@ from einops import rearrange
 from torch import Tensor, nn
 
 type GPTConfig = (
-    vocab_size: int, block_size: int, n_embed: int, n_head: int, n_layer: int
+    n_embed: int, n_head: int, n_layer: int,
+    vocab_size: int, block_size: int,
 )
 
 
@@ -97,6 +98,11 @@ class GPT(nn.Module):
         # weight tying: one [V, E] matrix both embeds tokens and scores them
         self.lm_head.weight = self.token_embedding_table.weight
 
+    # nn.Module has no .device; all of GPT's parameters live on one device
+    @property
+    def device(self) -> torch.device:
+        return self.lm_head.weight.device
+
     def _init_weights(self, module: nn.Module) -> None:
         # GPT-2 init: Linear and Embedding weights ~ N(0, 0.02), zero biases
         with torch.no_grad():
@@ -106,7 +112,7 @@ class GPT(nn.Module):
                     # 2 residual adds per block: scale so the stream's variance
                     # doesn't grow with depth
                     std /= math.sqrt(2 * self.n_layer)
-                module.weight.normal_(mean=0.0, std=std)
+                module.weight.normal_(mean=0.0, std=)
                 if module.bias is not None:
                     module.bias.zero_()
             elif isinstance(module, nn.Embedding):
@@ -147,17 +153,18 @@ if __name__ == "__main__":
     text = SHAKESPEARE.read_text()
     tok = CharTokenizer(text)
     ids = torch.tensor(tok.encode(text), dtype=torch.long)  # [N]
-    (train=) = split(ids)
+    (train_data=) = split(ids)
 
     cfg = (
-        vocab_size=tok.vocab_size, block_size=64, n_embed=128, n_head=4, n_layer=4
+        vocab_size=tok.vocab_size, block_size=64,
+        n_embed=128, n_head=4, n_layer=4,
     )
     model = GPT(cfg)
     print(cfg)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"{n_params / 1e6:.2f}M params")
 
-    x, y = get_batch(train, batch_size=8, block_size=cfg.block_size)  # each [B, T]
+    x, y = get_batch(train_data, batch_size=8, block_size=cfg.block_size)  # each [B, T]
     logits = model(x)  # [B, T, V]
     B, T, V = logits.shape
     loss = F.cross_entropy(logits.view(B * T, V), y.view(B * T))  # []

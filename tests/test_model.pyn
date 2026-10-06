@@ -57,6 +57,13 @@ def test_causal(model: GPT, cfg: GPTConfig):
     assert not torch.allclose(before[:, pos:], after[:, pos:])
 
 
+def test_device_follows_to(model: GPT):
+    assert model.device == torch.device("cpu")
+    # the meta device holds shapes but no data: moves without a GPU
+    model.to("meta")
+    assert model.device == torch.device("meta")
+
+
 def test_attention_heads_split_n_embed_evenly():
     with pytest.raises(AssertionError, match="n_embed 30 not divisible by n_head 4"):
         FlashAttention(n_embed=30, n_head=4)
