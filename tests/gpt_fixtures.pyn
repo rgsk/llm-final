@@ -1,0 +1,24 @@
+# the tiny GPT and token stream every test file shares; conftest.py re-exports these
+import pytest
+import torch
+from torch import Tensor
+
+from model import GPT, GPTConfig
+
+
+@pytest.fixture
+def cfg() -> GPTConfig:
+    return (
+        vocab_size=20, block_size=8, n_embed=32, n_head=4, n_layer=2, dropout=0.0
+    )
+
+
+@pytest.fixture
+def model(cfg: GPTConfig) -> GPT:
+    return GPT(cfg)
+
+
+@pytest.fixture
+def ids(cfg: GPTConfig) -> Tensor:
+    # next id is always current + 1 (mod V): trivially learnable
+    return torch.arange(400) % cfg.vocab_size  # [400]: 0, 1, ..., 19, 0, 1, ...

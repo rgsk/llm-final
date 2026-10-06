@@ -1,5 +1,7 @@
 # GPT (nanoGPT layout): token + position embeddings -> n_layer pre-norm blocks
-# (causal self-attention + MLP) -> final norm -> lm head tied to the token embedding
+# (causal self-attention + MLP) -> final norm -> lm head tied to the token embedding.
+# dropout (training only) on the embeddings, the attention weights and each
+# sublayer's output before it joins the residual stream
 import math
 from typing import TYPE_CHECKING
 
@@ -9,8 +11,12 @@ from einops import rearrange
 from torch import Tensor, nn
 
 type GPTConfig = (
-    n_embed: int, n_head: int, n_layer: int,
-    vocab_size: int, block_size: int,
+    n_embed: int,
+    n_head: int,
+    n_layer: int,
+    vocab_size: int,
+    block_size: int,
+    dropout: float,  # 0 disables it; 0.1-0.2 for a model that overfits
 )
 
 
@@ -20,14 +26,16 @@ class ResidualProj(nn.Linear):
 
 
 class FlashAttention(nn.Module):
-    def __init__(self, *, n_embed: int, n_head: int):
+    def __init__(self, *, n_embed: int, n_head: int, dropout: float):
         super().__init__()
         assert n_embed % n_head == 0, (
             f"n_embed {n_embed} not divisible by n_head {n_head}"
         )
         self.n_head = n_head
+        self.dropout = dropout
         self.qkv = nn.Linear(n_embed, 3 * n_embed, bias=False)
         self.proj = ResidualProj(n_embed, n_embed)
+        self.resid_dropout = nn.Dropout(dropout)
 
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, T, E]
@@ -38,18 +46,24 @@ class FlashAttention(nn.Module):
             qkv, "B T (three nh hs) -> three B nh T hs", three=3, nh=self.n_head
         )
         # fused causal attention (flash kernel on GPU): never materializes the
-        # [B, nh, T, T] score matrix; default scale is 1/sqrt(hs)
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # [B, nh, T, hs]
+        # [B, nh, T, T] score matrix; default scale is 1/sqrt(hs).
+        # a function, not a module: it can't see eval(), so turn dropout off by hand
+        dropout_p = self.dropout if self.training else 0.0
+        out = F.scaled_dot_product_attention(  # [B, nh, T, hs]
+            q, k, v, is_causal=True, dropout_p=
+        )
         # merge heads, then out proj to mix head information
         out = rearrange(out, "B nh T hs -> B T (nh hs)")  # [B, T, E]
-        return self.proj(out)
+        out = self.proj(out)
+        return self.resid_dropout(out)
 
 
 class FeedForward(nn.Module):
-    def __init__(self, *, n_embed: int):
+    def __init__(self, *, n_embed: int, dropout: float):
         super().__init__()
         self.up = nn.Linear(n_embed, 4 * n_embed)
         self.down = ResidualProj(4 * n_embed, n_embed)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, T, E]
@@ -57,16 +71,17 @@ class FeedForward(nn.Module):
         # position-wise MLP: expand to 4E, nonlinearity, project back
         h: Tensor = self.up(x)  # [B, T, 4E]
         h = F.relu(h)
-        return self.down(h)  # [B, T, E]
+        out = self.down(h)  # [B, T, E]
+        return self.dropout(out)
 
 
 class Block(nn.Module):
-    def __init__(self, *, n_embed: int, n_head: int):
+    def __init__(self, *, n_embed: int, n_head: int, dropout: float):
         super().__init__()
         self.ln1 = nn.LayerNorm(n_embed)
         self.ln2 = nn.LayerNorm(n_embed)
-        self.attn = FlashAttention(n_embed=, n_head=)
-        self.ffwd = FeedForward(n_embed=)
+        self.attn = FlashAttention(n_embed=, n_head=, dropout=)
+        self.ffwd = FeedForward(n_embed=, dropout=)
 
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, T, E]
@@ -82,15 +97,23 @@ class Block(nn.Module):
 class GPT(nn.Module):
     def __init__(
         self,
-        (vocab_size=, block_size=, n_embed=, n_head=, n_layer=): GPTConfig,
+        (
+            vocab_size=,
+            block_size=,
+            n_embed=,
+            n_head=,
+            n_layer=,
+            dropout=,
+        ): GPTConfig,
     ):
         super().__init__()
         self.n_layer = n_layer
         self.block_size = block_size
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        self.emb_dropout = nn.Dropout(dropout)
         self.blocks = nn.ModuleList(
-            [Block(n_embed=, n_head=) for _ in range(n_layer)]
+            [Block(n_embed=, n_head=, dropout=) for _ in range(n_layer)]
         )
         self.ln_f = nn.LayerNorm(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size, bias=False)
@@ -130,6 +153,7 @@ class GPT(nn.Module):
         pos = torch.arange(T, device=idx.device)  # [T]
         pos_emb: Tensor = self.position_embedding_table(pos)  # [T, E]
         x: Tensor = tok_emb + pos_emb  # [B, T, E], pos_emb broadcast over B
+        x = self.emb_dropout(x)
         for block in self.blocks:
             x = block(x)
         # final norm, then a score per vocab token at every position:
@@ -158,6 +182,7 @@ if __name__ == "__main__":
     cfg = (
         vocab_size=tok.vocab_size, block_size=64,
         n_embed=128, n_head=4, n_layer=4,
+        dropout=0.0,
     )
     model = GPT(cfg)
     print(cfg)

@@ -11,22 +11,6 @@ from model import GPT, GPTConfig
 from train import TrainConfig, batch_loss, full_val_loss, sampled_train_loss, train
 
 
-@pytest.fixture
-def cfg() -> GPTConfig:
-    return (vocab_size=20, block_size=8, n_embed=32, n_head=4, n_layer=2)
-
-
-@pytest.fixture
-def model(cfg: GPTConfig):
-    return GPT(cfg)
-
-
-@pytest.fixture
-def ids(cfg: GPTConfig):
-    # next id is always current + 1 (mod V): trivially learnable
-    return torch.arange(400) % cfg.vocab_size  # [400]: 0, 1, ..., 19, 0, 1, ...
-
-
 def test_untrained_loss_is_uniform_guess(model: GPT, cfg: GPTConfig, ids: Tensor):
     x, y = get_batch(ids, batch_size=16, block_size=cfg.block_size)  # each [B, T]
     uniform = math.log(cfg.vocab_size)

@@ -139,6 +139,7 @@ if __name__ == "__main__":
     gpt_cfg = (
         vocab_size=tok.vocab_size, block_size=64,
         n_embed=128, n_head=4, n_layer=4,
+        dropout=0.0,
     )
     train_cfg: TrainConfig = (
         batch_size=32, max_steps=500, lr=3e-3,

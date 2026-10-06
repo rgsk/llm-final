@@ -36,7 +36,7 @@ def load_checkpoint(
     gpt_cfg: GPTConfig = (
         vocab_size=saved["vocab_size"], block_size=saved["block_size"],
         n_embed=saved["n_embed"], n_head=saved["n_head"],
-        n_layer=saved["n_layer"],
+        n_layer=saved["n_layer"], dropout=saved["dropout"],
     )
     # rebuild the architecture from the file, then fill in its weights
     model = GPT(gpt_cfg).to(device)

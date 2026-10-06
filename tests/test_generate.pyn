@@ -11,16 +11,6 @@ from train import TrainConfig, train
 
 
 @pytest.fixture
-def cfg() -> GPTConfig:
-    return (vocab_size=20, block_size=8, n_embed=32, n_head=4, n_layer=2)
-
-
-@pytest.fixture
-def model(cfg: GPTConfig):
-    return GPT(cfg)
-
-
-@pytest.fixture
 def prompt():
     return torch.tensor([[1, 2, 3], [7, 8, 9]])  # [2, 3]
 
@@ -62,9 +52,8 @@ def test_restores_mode(model: GPT, prompt: Tensor, training: bool):
     assert model.training is training
 
 
-def test_trained_model_continues_the_pattern(model: GPT, cfg: GPTConfig):
-    # train on 0, 1, ..., 19, 0, 1, ...: the next id is always current + 1 (mod V)
-    ids = torch.arange(400) % cfg.vocab_size  # [400]
+def test_trained_model_continues_the_pattern(model: GPT, cfg: GPTConfig, ids: Tensor):
+    # ids is 0, 1, ..., 19, 0, 1, ...: the next id is always current + 1 (mod V)
     train_cfg: TrainConfig = (
         batch_size=16, max_steps=200, lr=1e-2,
         eval_interval=200, eval_iters=5,

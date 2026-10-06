@@ -1,5 +1,5 @@
-# GPT top to bottom: output shapes, causality, parameter counts per component,
-# init, and that it can learn at all
+# GPT top to bottom: output shapes, causality, dropout, parameter counts per
+# component, init, and that it can learn at all
 import math
 
 import pytest
@@ -8,16 +8,6 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from model import GPT, FeedForward, FlashAttention, GPTConfig, ResidualProj
-
-
-@pytest.fixture
-def cfg() -> GPTConfig:
-    return (vocab_size=20, block_size=16, n_embed=32, n_head=4, n_layer=2)
-
-
-@pytest.fixture
-def model(cfg: GPTConfig):
-    return GPT(cfg)
 
 
 def random_ids(cfg: GPTConfig, *, batch_size: int = 3) -> Tensor:
@@ -38,15 +28,13 @@ def test_shorter_than_block_size(model: GPT, cfg: GPTConfig):
 
 def test_longer_than_block_size_fails(model: GPT, cfg: GPTConfig):
     too_long = torch.zeros(1, cfg.block_size + 1, dtype=torch.long)  # [1, T + 1]
-    with pytest.raises(
-        AssertionError, match="sequence length 17 exceeds block_size 16"
-    ):
+    with pytest.raises(AssertionError, match="sequence length 9 exceeds block_size 8"):
         model(too_long)
 
 
 def test_causal(model: GPT, cfg: GPTConfig):
     # change the token at pos: logits before pos must not move, the rest must
-    pos = 10
+    pos = cfg.block_size // 2  # mid-sequence: positions on both sides
     ids = random_ids(cfg)  # [B, T]
     changed = ids.clone()
     changed[:, pos] = (changed[:, pos] + 1) % cfg.vocab_size
@@ -55,6 +43,30 @@ def test_causal(model: GPT, cfg: GPTConfig):
 
     assert torch.equal(before[:, :pos], after[:, :pos])
     assert not torch.allclose(before[:, pos:], after[:, pos:])
+
+
+@pytest.fixture
+def dropout_model(cfg: GPTConfig) -> GPT:
+    return GPT(cfg._replace(dropout=0.5))
+
+
+def test_dropout_is_random_in_train_mode(dropout_model: GPT, cfg: GPTConfig):
+    ids = random_ids(cfg)  # [B, T]
+    dropout_model.train()
+    assert not torch.equal(dropout_model(ids), dropout_model(ids))
+
+
+def test_dropout_is_off_in_eval_mode(dropout_model: GPT, cfg: GPTConfig):
+    # covers the attention weights too: dropout_p there is zeroed by hand
+    ids = random_ids(cfg)  # [B, T]
+    dropout_model.eval()
+    assert torch.equal(dropout_model(ids), dropout_model(ids))
+
+
+def test_zero_dropout_is_deterministic_in_train_mode(model: GPT, cfg: GPTConfig):
+    ids = random_ids(cfg)  # [B, T]
+    model.train()
+    assert torch.equal(model(ids), model(ids))
 
 
 def test_device_follows_to(model: GPT):
@@ -66,7 +78,7 @@ def test_device_follows_to(model: GPT):
 
 def test_attention_heads_split_n_embed_evenly():
     with pytest.raises(AssertionError, match="n_embed 30 not divisible by n_head 4"):
-        FlashAttention(n_embed=30, n_head=4)
+        FlashAttention(n_embed=30, n_head=4, dropout=0.0)
 
 
 def n_params(module: nn.Module) -> int:
@@ -84,7 +96,7 @@ def attention_params(E: int) -> int:
 
 
 def test_attention_params(cfg: GPTConfig):
-    attn = FlashAttention(n_embed=cfg.n_embed, n_head=cfg.n_head)
+    attn = FlashAttention(n_embed=cfg.n_embed, n_head=cfg.n_head, dropout=cfg.dropout)
     assert n_params(attn) == attention_params(cfg.n_embed)
 
 
@@ -95,7 +107,7 @@ def feed_forward_params(E: int) -> int:
 
 
 def test_feed_forward_params(cfg: GPTConfig):
-    ffwd = FeedForward(n_embed=cfg.n_embed)
+    ffwd = FeedForward(n_embed=cfg.n_embed, dropout=cfg.dropout)
     assert n_params(ffwd) == feed_forward_params(cfg.n_embed)
 
 
@@ -132,7 +144,9 @@ def test_gpt_params(model: GPT, cfg: GPTConfig):
 
 def test_residual_projections_start_smaller():
     # wide layers so each weight matrix's sample std lands within 5% of the target
-    cfg = (vocab_size=20, block_size=16, n_embed=256, n_head=4, n_layer=8)
+    cfg = (
+        vocab_size=20, block_size=16, n_embed=256, n_head=4, n_layer=8, dropout=0.0
+    )
     model = GPT(cfg)
     std = 0.02
     residual_std = std / math.sqrt(2 * cfg.n_layer)
