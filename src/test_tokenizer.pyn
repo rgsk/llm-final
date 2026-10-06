@@ -1,0 +1,44 @@
+from pathlib import Path
+
+import pytest
+
+from paths import SHAKESPEARE
+from tokenizer import CharTokenizer
+
+
+@pytest.fixture
+def tok():
+    return CharTokenizer("hello world")
+
+
+def test_vocab_is_sorted_distinct_chars(tok: CharTokenizer):
+    assert tok.itoc == [" ", "d", "e", "h", "l", "o", "r", "w"]
+    assert tok.vocab_size == 8
+
+
+def test_ids_follow_sorted_order(tok: CharTokenizer):
+    assert tok.encode(" dehlorw") == list(range(8))
+    assert tok.encode("hello") == [3, 2, 4, 4, 5]
+
+
+@pytest.mark.parametrize("s", ["", "h", "hello world", "world hello  ", "lll"])
+def test_roundtrip(tok: CharTokenizer, s: str):
+    assert tok.decode(tok.encode(s)) == s
+
+
+def test_unseen_char_raises(tok: CharTokenizer):
+    with pytest.raises(KeyError):
+        tok.encode("hello!")
+
+
+def test_from_file_matches_text(tmp_path: Path):
+    p = tmp_path / "t.txt"
+    p.write_text("abcab\n")
+    assert CharTokenizer.from_file(p).itoc == CharTokenizer("abcab\n").itoc
+
+
+def test_shakespeare():
+    text = SHAKESPEARE.read_text()
+    tok = CharTokenizer(text)
+    assert tok.vocab_size == 65
+    assert tok.decode(tok.encode(text[:10_000])) == text[:10_000]

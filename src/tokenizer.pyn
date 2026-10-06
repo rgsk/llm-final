@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+class CharTokenizer:
+    def __init__(self, text: str):
+        self.itoc = sorted(set(text))
+        self.ctoi = {c: i for i, c in enumerate(self.itoc)}
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> CharTokenizer:
+        return cls(Path(path).read_text())
+
+    @property
+    def vocab_size(self) -> int:
+        return len(self.itoc)
+
+    def encode(self, s: str) -> list[int]:
+        return [self.ctoi[c] for c in s]
+
+    def decode(self, ids: list[int]) -> str:
+        return "".join(self.itoc[i] for i in ids)
+
+
+if __name__ == "__main__":
+    from paths import SHAKESPEARE
+
+    text = SHAKESPEARE.read_text()
+    tok = CharTokenizer(text)
+    print(f"{len(text):,} chars  vocab_size {tok.vocab_size}")
+    print(f"vocab: {''.join(tok.itoc)!r}")
+
+    sample = "First Citizen:\nBefore we proceed"
+    ids = tok.encode(sample)
+    print(f"{sample!r}\n -> {ids}\n -> {tok.decode(ids)!r}")
