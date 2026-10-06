@@ -3,10 +3,8 @@ name = "llm-final"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "beartype>=0.22.9",
     "byname",
     "einops>=0.8.2",
-    "jaxtyping>=0.3.11",
     "numpy>=2.5.2",
     "torch==2.13.0",
 ]

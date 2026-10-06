@@ -3,15 +3,24 @@ from torch import Tensor
 
 
 def split(ids: Tensor, *, frac: float = 0.9):
+    # ids: [N]
+    # out: train [n], val [N - n]
     n = int(frac * len(ids))
     return (train=ids[:n], val=ids[n:])
 
 
-def get_batch(d: Tensor, *, batch_size: int, block_size: int, device: str = "cpu"):
-    ix = torch.randint(len(d) - block_size, (batch_size,))
-    x = torch.stack([d[i : i + block_size] for i in ix])
-    y = torch.stack([d[i + 1 : i + 1 + block_size] for i in ix])
-    return (x := x.to(device), y := y.to(device))
+def get_batch(ids: Tensor, *, batch_size: int, block_size: int, device: str = "cpu"):
+    # ids: [N]
+    # out: x, y each [B, T]
+    assert len(ids) > block_size, (
+        f"need more than block_size {block_size} ids, got {len(ids)}"
+    )
+    ix = torch.randint(len(ids) - block_size, (batch_size,))  # [B]
+    x = torch.stack([ids[i : i + block_size] for i in ix])  # [B, T]
+    y = torch.stack([ids[i + 1 : i + 1 + block_size] for i in ix])
+    x = x.to(device)
+    y = y.to(device)
+    return x, y
 
 
 if __name__ == "__main__":
@@ -21,10 +30,10 @@ if __name__ == "__main__":
     torch.manual_seed(1)
     text = SHAKESPEARE.read_text()
     tok = CharTokenizer(text)
-    ids = torch.tensor(tok.encode(text), dtype=torch.long)
+    ids = torch.tensor(tok.encode(text), dtype=torch.long)  # [N]
     (train=, val=) = split(ids)
     print(f"train {len(train):,}  val {len(val):,}")
 
-    x, y = get_batch(train, batch_size=2, block_size=16)
+    x, y = get_batch(train, batch_size=2, block_size=16)  # each [B, T]
     for xr, yr in zip(x, y):
         print(f"x {tok.decode(xr.tolist())!r}\ny {tok.decode(yr.tolist())!r}\n")

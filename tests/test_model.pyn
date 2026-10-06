@@ -3,7 +3,6 @@ import math
 import pytest
 import torch
 import torch.nn.functional as F
-from jaxtyping import TypeCheckError
 from torch import Tensor, nn
 
 from model import GPT, FeedForward, FlashAttention, GPTConfig, ResidualProj
@@ -44,6 +43,11 @@ def test_causal(model: GPT, cfg: GPTConfig):
 
     assert torch.equal(before[:, :pos], after[:, :pos])
     assert not torch.allclose(before[:, pos:], after[:, pos:])
+
+
+def test_attention_heads_split_n_embed_evenly():
+    with pytest.raises(AssertionError, match="n_embed 30 not divisible by n_head 4"):
+        FlashAttention(n_embed=30, n_head=4)
 
 
 def n_params(module: nn.Module) -> int:
@@ -117,18 +121,6 @@ def test_residual_projections_start_smaller():
             expected = residual_std if isinstance(m, ResidualProj) else std
             assert m.weight.std().item() == pytest.approx(expected, rel=0.05), m
             assert m.bias is None or not m.bias.any()
-
-
-@pytest.mark.parametrize(
-    "bad",
-    [
-        pytest.param(torch.zeros(16, dtype=torch.long), id="missing-batch-dim"),
-        pytest.param(torch.zeros(2, 16), id="float-ids"),
-    ],
-)
-def test_rejects_wrong_input(model: GPT, bad: Tensor):
-    with pytest.raises(TypeCheckError):
-        model(bad)
 
 
 def test_overfits_one_batch(model: GPT, cfg: GPTConfig):
