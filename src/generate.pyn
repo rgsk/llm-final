@@ -1,0 +1,41 @@
+# autoregressive sampling: predict the next token, append it, repeat
+import torch
+import torch.nn.functional as F
+from torch import Tensor
+
+from model import GPT
+
+
+@torch.no_grad()
+def generate(model: GPT, idx: Tensor, *, max_new_tokens: int) -> Tensor:
+    # idx: [B, T0] prompt ids
+    # out: [B, T0 + max_new_tokens], the prompt followed by the sampled ids
+    was_training = model.training
+    model.eval()
+    for _ in range(max_new_tokens):
+        # the model has only block_size positions: condition on the last block_size ids
+        context = idx[:, -model.block_size :]  # [B, t], t <= block_size
+        logits = model(context)  # [B, t, V]
+        # only the last position predicts the token that comes next
+        last = logits[:, -1, :]  # [B, V]
+        probs = F.softmax(last, dim=-1)  # [B, V]
+        # sample instead of argmax: always taking the top token tends to loop
+        nxt = torch.multinomial(probs, num_samples=1)  # [B, 1]
+        idx = torch.cat([idx, nxt], dim=1)  # [B, T + 1]
+    model.train(was_training)  # restore the caller's mode
+    return idx
+
+
+if __name__ == "__main__":
+    from paths import SHAKESPEARE
+    from tokenizer import CharTokenizer
+
+    torch.manual_seed(1337)
+    tok = CharTokenizer(SHAKESPEARE.read_text())
+    cfg = (vocab_size=tok.vocab_size, block_size=16, n_embed=32, n_head=4, n_layer=2)
+    # untrained, so the text is random chars; this shows the mechanics only
+    model = GPT(cfg)
+    prompt = torch.tensor([tok.encode("ROMEO:")])  # [1, 6]
+    out = generate(model, prompt, max_new_tokens=40)  # [1, 46], past block_size
+    print(f"{tuple(prompt.shape)} -> {tuple(out.shape)}")
+    print(repr(tok.decode(out[0].tolist())))

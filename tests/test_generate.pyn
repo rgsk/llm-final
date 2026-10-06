@@ -1,0 +1,76 @@
+# generate: output layout, the block_size crop, reproducibility, and that a trained
+# model continues the pattern it learned
+import pytest
+import torch
+from torch import Tensor
+
+from data import split
+from generate import generate
+from model import GPT, GPTConfig
+from train import TrainConfig, train
+
+
+@pytest.fixture
+def cfg() -> GPTConfig:
+    return (vocab_size=20, block_size=8, n_embed=32, n_head=4, n_layer=2)
+
+
+@pytest.fixture
+def model(cfg: GPTConfig):
+    return GPT(cfg)
+
+
+@pytest.fixture
+def prompt():
+    return torch.tensor([[1, 2, 3], [7, 8, 9]])  # [2, 3]
+
+
+def test_output_is_prompt_then_new_tokens(model: GPT, prompt: Tensor):
+    out = generate(model, prompt, max_new_tokens=5)  # [2, 8]
+    assert out.shape == (2, 3 + 5)
+    assert torch.equal(out[:, :3], prompt)
+
+
+def test_new_tokens_are_valid_ids(model: GPT, cfg: GPTConfig, prompt: Tensor):
+    out = generate(model, prompt, max_new_tokens=50)  # [2, 53]
+    new = out[:, 3:]  # [2, 50]
+    assert new.min() >= 0 and new.max() < cfg.vocab_size
+
+
+def test_generates_past_block_size(model: GPT, cfg: GPTConfig, prompt: Tensor):
+    # without the crop, the model would see T > block_size and assert
+    n = 3 * cfg.block_size
+    out = generate(model, prompt, max_new_tokens=n)  # [2, 3 + n]
+    assert out.shape == (2, 3 + n)
+
+
+def test_same_seed_same_sample(model: GPT, prompt: Tensor):
+    torch.manual_seed(0)
+    a = generate(model, prompt, max_new_tokens=20)  # [2, 23]
+    torch.manual_seed(0)
+    b = generate(model, prompt, max_new_tokens=20)  # [2, 23]
+    torch.manual_seed(1)
+    c = generate(model, prompt, max_new_tokens=20)  # [2, 23]
+    assert torch.equal(a, b)
+    assert not torch.equal(a, c)
+
+
+@pytest.mark.parametrize("training", [True, False])
+def test_restores_mode(model: GPT, prompt: Tensor, training: bool):
+    model.train(training)
+    generate(model, prompt, max_new_tokens=2)
+    assert model.training is training
+
+
+def test_trained_model_continues_the_pattern(model: GPT, cfg: GPTConfig):
+    # train on 0, 1, ..., 19, 0, 1, ...: the next id is always current + 1 (mod V)
+    ids = torch.arange(400) % cfg.vocab_size  # [400]
+    train_cfg: TrainConfig = (
+        batch_size=16, max_steps=200, lr=1e-2, eval_interval=200, eval_iters=5
+    )
+    train(model, split(ids), train_cfg)
+
+    prompt = torch.tensor([[5, 6, 7]])  # [1, 3]
+    out = generate(model, prompt, max_new_tokens=30)  # [1, 33]
+    expected = (torch.arange(5, 5 + 33) % cfg.vocab_size).unsqueeze(0)  # [1, 33]
+    assert torch.equal(out, expected)
