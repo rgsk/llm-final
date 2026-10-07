@@ -17,3 +17,6 @@ wheels/
 artifacts/
 wandb/
 temp/
+
+scratch.pyn
+practice.ipynb

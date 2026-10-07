@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import torch
+from byname import record
 
 from model import GPT, GPTConfig
 
@@ -30,14 +31,9 @@ def load_checkpoint(
 ) -> (model: GPT, gpt_cfg: GPTConfig, step: int, val_loss: float):
     # weights_only: unpickle tensors and plain containers, never arbitrary code
     ckpt = torch.load(path, map_location=device, weights_only=True)
-    saved = ckpt["gpt_cfg"]
-    # field by field, not (**saved): a dict spread can't be checked, this record
-    # can, so a field added to GPTConfig is flagged here as missing
-    gpt_cfg: GPTConfig = (
-        vocab_size=saved["vocab_size"], block_size=saved["block_size"],
-        n_embed=saved["n_embed"], n_head=saved["n_head"],
-        n_layer=saved["n_layer"], dropout=saved["dropout"],
-    )
+    # names and types checked at runtime: a file saved before a GPTConfig field
+    # existed raises here, naming the missing field
+    gpt_cfg = record(GPTConfig, ckpt["gpt_cfg"])
     # rebuild the architecture from the file, then fill in its weights
     model = GPT(gpt_cfg).to(device)
     model.load_state_dict(ckpt["model"])  # strict: a missing or extra key raises
