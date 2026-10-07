@@ -139,7 +139,6 @@ class Run:
         else:
             status, exit_code = "failed", 1
         error_line = None
-        line_no: int | None = None
         traceback_text = None
         if error is not None:
             # "ValueError: loss is nan": the line a traceback ends with
@@ -149,8 +148,6 @@ class Run:
             if isinstance(error, KeyboardInterrupt):
                 print(error_line)
             else:
-                # the line the error was raised on: the traceback's last frame
-                line_no = traceback.extract_tb(error.__traceback__)[-1].lineno
                 traceback_text = "".join(traceback.format_exception(error))
                 print(traceback_text, end="")
             skip_printing_again(error)
@@ -160,7 +157,6 @@ class Run:
                 "event": "end",
                 "status": status,
                 "error": error_line,
-                "line": line_no,
                 "traceback": traceback_text,
             }
         )

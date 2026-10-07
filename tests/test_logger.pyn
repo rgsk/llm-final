@@ -48,7 +48,6 @@ def test_jsonl_holds_config_rows_summary_then_end(tmp_path: Path):
         "event": "end",
         "status": "finished",
         "error": None,
-        "line": None,
         "traceback": None,
     }
 
@@ -113,7 +112,6 @@ def test_an_error_ends_the_log_with_its_traceback(tmp_path: Path):
     # the .jsonl keeps the error line, and the whole traceback the .log shows
     *_, end = read_lines(run)
     traceback_text: str = end.pop("traceback")
-    line: int = end.pop("line")
     assert end == {
         "event": "end",
         "status": "failed",
@@ -121,9 +119,6 @@ def test_an_error_ends_the_log_with_its_traceback(tmp_path: Path):
     }
     assert traceback_text.startswith("Traceback (most recent call last):")
     assert traceback_text in run.log_path.read_text()
-    # line: where it was raised, the raise above in this file
-    raised_on = Path(__file__).read_text().splitlines()[line - 1]
-    assert raised_on.strip() == 'raise ValueError("loss is nan")'
 
 
 def test_ctrl_c_ends_the_log_with_one_line_not_a_traceback(tmp_path: Path):
@@ -142,6 +137,5 @@ def test_ctrl_c_ends_the_log_with_one_line_not_a_traceback(tmp_path: Path):
         "event": "end",
         "status": "interrupted",
         "error": "KeyboardInterrupt",
-        "line": None,
         "traceback": None,
     }
