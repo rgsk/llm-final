@@ -1,5 +1,6 @@
 # losses, evaluation and the training loop, on a tiny GPT
 import math
+from itertools import pairwise
 
 import pytest
 import torch
@@ -13,6 +14,7 @@ from train import (
     autocast,
     batch_loss,
     full_val_loss,
+    lr_at,
     sampled_train_loss,
     train,
 )
@@ -119,19 +121,119 @@ def test_evaluation_restores_mode(model: GPT, ids: Tensor, training: bool):
     assert model.training is training
 
 
-@pytest.fixture
-def train_cfg() -> TrainConfig:
-    return (batch_size=16, max_steps=60, lr=1e-2, eval_interval=20, eval_iters=5)
+# lr_at's settings; spread into it as **lr_cfg. Steps 0 .. 99 run: warmup on
+# 0 .. 4, decay on 5 .. 99
+lr_cfg = (warmup_steps=5, max_steps=100, max_lr=1e-2, min_lr=1e-3)
 
 
-def test_history_has_one_entry_per_eval(
-    model: GPT, ids: Tensor, train_cfg: TrainConfig
-):
+def test_warmup_starts_at_one_step_and_reaches_max_lr():
+    (warmup_steps=, max_lr=) = lr_cfg
+    # step 0 already takes one warmup step: 1e-2 / 5
+    assert lr_at(0, **lr_cfg) == max_lr / warmup_steps
+    assert lr_at(0, **lr_cfg) == 2.0e-3
+    assert lr_at(warmup_steps - 1, **lr_cfg) == pytest.approx(max_lr)
+
+
+def test_decay_starts_at_max_lr_and_ends_at_min_lr():
+    (warmup_steps=, max_steps=, max_lr=, min_lr=) = lr_cfg
+    # no jump where warmup ends
+    assert lr_at(warmup_steps, **lr_cfg) == pytest.approx(max_lr)
+    last_step = max_steps - 1
+    # the last step that runs: cos(pi) is exactly -1, so exactly min_lr
+    assert lr_at(last_step, **lr_cfg) == min_lr
+    assert lr_at(last_step, **lr_cfg) == 1e-3
+    assert lr_at(max_steps, **lr_cfg) == min_lr  # past the run, it stays there
+
+
+def test_lr_rises_through_warmup_then_only_falls():
+    (warmup_steps=, max_steps=) = lr_cfg
+    warmup = [lr_at(s, **lr_cfg) for s in range(warmup_steps)]
+    decay = [lr_at(s, **lr_cfg) for s in range(warmup_steps, max_steps)]
+    assert all(a < b for a, b in pairwise(warmup))
+    assert all(a > b for a, b in pairwise(decay))
+
+
+def test_cosine_is_halfway_at_the_midpoint_of_decay():
+    (warmup_steps=, max_steps=, max_lr=, min_lr=) = lr_cfg
+    midpoint = (warmup_steps + max_steps - 1) // 2  # 52, halfway through 5 .. 99
+    assert lr_at(midpoint, **lr_cfg) == pytest.approx((max_lr + min_lr) / 2)
+    assert lr_at(midpoint, **lr_cfg) == pytest.approx(5.5e-3)
+
+
+def test_warmup_must_leave_steps_to_decay():
+    # 11 steps run (0 .. 10) and warmup takes 0 .. 9: step 10 alone can't decay
+    no_decay = lr_cfg._replace(warmup_steps=10, max_steps=11)
+    with pytest.raises(
+        AssertionError, match="warmup_steps 10 leaves no decay before step 10"
+    ):
+        lr_at(0, **no_decay)
+
+
+# a short run on the trivially learnable ids
+train_cfg: TrainConfig = (
+    batch_size=16, max_steps=60,
+    max_lr=1e-2, min_lr=1e-3,
+    warmup_steps=5,
+    eval_interval=20,
+    eval_iters=5,
+)
+
+
+def test_history_has_one_entry_per_eval(model: GPT, ids: Tensor):
     history = train(model, split(ids), train_cfg)
-    assert [h.step for h in history] == [0, 20, 40, 60]
+    (max_steps=, eval_interval=) = train_cfg
+    # every eval_interval steps inside the loop, then once more after the last step
+    eval_steps = [*range(0, max_steps, eval_interval), max_steps]
+    assert [h.step for h in history] == eval_steps
+    # the same in numbers
+    assert eval_steps == [0, 20, 40, 60]
 
 
-def test_training_lowers_val_loss(model: GPT, ids: Tensor, train_cfg: TrainConfig):
+def test_training_lowers_val_loss(model: GPT, ids: Tensor):
     history = train(model, split(ids), train_cfg)
     first, last = history[0], history[-1]
     assert last.val_loss < first.val_loss / 2  # starts near ln(20) = 3.0
+
+
+def test_train_steps_with_the_scheduled_lr(model: GPT, ids: Tensor):
+    # each eval records the lr the optimizer used for its latest step
+    history = train(model, split(ids), train_cfg)
+    (warmup_steps=, max_steps=, max_lr=, min_lr=, eval_interval=) = (
+        train_cfg
+    )
+    # an eval inside the loop follows setting its step's lr; the final eval, after
+    # the loop, still holds the last step's (max_steps - 1)
+    lr_steps = [*range(0, max_steps, eval_interval), max_steps - 1]
+    expected = [
+        lr_at(s, warmup_steps=, max_steps=, max_lr=, min_lr=)
+        for s in lr_steps
+    ]
+    assert [h.lr for h in history] == pytest.approx(expected)
+    # the same in numbers: warmup 5 steps to 1e-2, then cosine down to exactly
+    # min_lr (1e-3) on step 59, the last step
+    assert lr_steps == [0, 20, 40, 59]
+    lrs = [h.lr for h in history]
+    assert lrs == pytest.approx([2.0e-3, 8.393e-3, 3.480e-3, 1.0e-3], rel=1e-3)
+
+
+def test_the_last_eval_holds_the_last_steps_lr_not_the_last_evals(
+    model: GPT, ids: Tensor
+):
+    # 19 steps, an eval every 4: evals at 16 and 19 are 3 steps apart, but their
+    # lrs are steps 16 and 18: the final eval sees the last step's lr (18)
+    short_cfg = train_cfg._replace(max_steps=19, eval_interval=4)
+    history = train(model, split(ids), short_cfg)
+    assert [h.step for h in history] == [0, 4, 8, 12, 16, 19]
+    (warmup_steps=, max_steps=, max_lr=, min_lr=) = short_cfg
+    lr_steps = [0, 4, 8, 12, 16, 18]
+    expected = [
+        lr_at(s, warmup_steps=, max_steps=, max_lr=, min_lr=)
+        for s in lr_steps
+    ]
+    lrs = [h.lr for h in history]
+    assert lrs == pytest.approx(expected)
+    # in numbers: step 4 ends the 5-step warmup at 1e-2, then the decay reaches
+    # min_lr (1e-3) on step 18, the last step
+    assert lrs == pytest.approx(
+        [2.0e-3, 1.0e-2, 8.868e-3, 4.958e-3, 1.515e-3, 1.0e-3], rel=1e-3
+    )

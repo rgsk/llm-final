@@ -1,5 +1,6 @@
 # saving a GPT and rebuilding it from the file alone, and train's save_best
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -68,7 +69,7 @@ def test_a_checkpoint_missing_a_config_field_is_rejected(
 ):
     # as if saved before GPTConfig had dropout
     save_checkpoint(ckpt_path, model, cfg, step=0, val_loss=0.0)
-    ckpt = torch.load(ckpt_path, weights_only=True)
+    ckpt: dict[str, Any] = torch.load(ckpt_path, weights_only=True)
     del ckpt["gpt_cfg"]["dropout"]
     torch.save(ckpt, ckpt_path)
     with pytest.raises(TypeError, match="missing field 'dropout'"):
@@ -79,7 +80,11 @@ def test_save_best_keeps_the_lowest_val_loss(
     model: GPT, cfg: GPTConfig, ids: Tensor, ckpt_path: Path
 ):
     train_cfg: TrainConfig = (
-        batch_size=16, max_steps=60, lr=1e-2, eval_interval=20, eval_iters=5
+        batch_size=16, max_steps=60,
+        max_lr=1e-2, min_lr=1e-3,
+        warmup_steps=5,
+        eval_interval=20,
+        eval_iters=5,
     )
     history = train(
         model, split(ids), train_cfg, save_best=(path=ckpt_path, gpt_cfg=cfg)

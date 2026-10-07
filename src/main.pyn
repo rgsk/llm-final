@@ -26,8 +26,11 @@ if __name__ == "__main__":
         dropout=0.2,
     )
     train_cfg: TrainConfig = (
-        batch_size=64, max_steps=2000, lr=1e-3,
-        eval_interval=250, eval_iters=20,
+        batch_size=64, max_steps=5000,
+        max_lr=1e-3, min_lr=1e-4,
+        warmup_steps=100,
+        eval_interval=250,
+        eval_iters=20,
     )
     model = GPT(gpt_cfg).to(device)
     ckpt_path = CKPT_DIR / "main.pt"

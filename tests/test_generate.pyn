@@ -55,8 +55,11 @@ def test_restores_mode(model: GPT, prompt: Tensor, training: bool):
 def test_trained_model_continues_the_pattern(model: GPT, cfg: GPTConfig, ids: Tensor):
     # ids is 0, 1, ..., 19, 0, 1, ...: the next id is always current + 1 (mod V)
     train_cfg: TrainConfig = (
-        batch_size=16, max_steps=200, lr=1e-2,
-        eval_interval=200, eval_iters=5,
+        batch_size=16, max_steps=200,
+        max_lr=1e-2, min_lr=1e-3,
+        warmup_steps=10,
+        eval_interval=200,
+        eval_iters=5,
     )
     train(model, split(ids), train_cfg)
 

@@ -49,7 +49,7 @@ class FlashAttention(nn.Module):
         # [B, nh, T, T] score matrix; default scale is 1/sqrt(hs).
         # a function, not a module: it can't see eval(), so turn dropout off by hand
         dropout_p = self.dropout if self.training else 0.0
-        out = F.scaled_dot_product_attention(  # [B, nh, T, hs]
+        out: Tensor = F.scaled_dot_product_attention(  # [B, nh, T, hs]
             q, k, v, is_causal=True, dropout_p=
         )
         # merge heads, then out proj to mix head information
@@ -71,7 +71,7 @@ class FeedForward(nn.Module):
         # position-wise MLP: expand to 4E, nonlinearity, project back
         h: Tensor = self.up(x)  # [B, T, 4E]
         h = F.relu(h)
-        out = self.down(h)  # [B, T, E]
+        out: Tensor = self.down(h)  # [B, T, E]
         return self.dropout(out)
 
 

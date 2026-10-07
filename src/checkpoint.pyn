@@ -1,6 +1,7 @@
 # a checkpoint file: a GPT's weights plus the config that rebuilds it, so loading
 # needs nothing but the file
 from pathlib import Path
+from typing import Any
 
 import torch
 from byname import record
@@ -30,7 +31,7 @@ def load_checkpoint(
     path: Path, *, device: str | torch.device = "cpu"
 ) -> (model: GPT, gpt_cfg: GPTConfig, step: int, val_loss: float):
     # weights_only: unpickle tensors and plain containers, never arbitrary code
-    ckpt = torch.load(path, map_location=device, weights_only=True)
+    ckpt: dict[str, Any] = torch.load(path, map_location=device, weights_only=True)
     # names and types checked at runtime: a file saved before a GPTConfig field
     # existed raises here, naming the missing field
     gpt_cfg = record(GPTConfig, ckpt["gpt_cfg"])
