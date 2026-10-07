@@ -29,6 +29,7 @@ if __name__ == "__main__":
     train_cfg: TrainConfig = (
         batch_size=64, max_steps=5000,
         max_lr=1e-3, min_lr=1e-4,
+        weight_decay=0.1,
         warmup_steps=100,
         eval_interval=250,
         eval_iters=20,

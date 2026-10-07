@@ -71,6 +71,7 @@ def test_train_logs_every_eval_and_a_summary(model: GPT, ids: Tensor, tmp_path: 
     train_cfg: TrainConfig = (
         batch_size=16, max_steps=60,
         max_lr=1e-2, min_lr=1e-3,
+        weight_decay=0.1,
         warmup_steps=5,
         eval_interval=20,
         eval_iters=5,

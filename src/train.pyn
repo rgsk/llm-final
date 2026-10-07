@@ -2,6 +2,7 @@
 import math
 import time
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -15,6 +16,7 @@ from model import GPT, GPTConfig
 type TrainConfig = (
     batch_size: int, max_steps: int,
     max_lr: float, min_lr: float,
+    weight_decay: float,
     warmup_steps: int,
     eval_interval: int,
     eval_iters: int,
@@ -38,6 +40,18 @@ def lr_at(
     progress = (step - warmup_steps) / (last_step - warmup_steps)  # 0 -> 1
     cosine = 0.5 * (1 + math.cos(math.pi * progress))  # 1 -> 0
     return min_lr + cosine * (max_lr - min_lr)
+
+
+def param_groups(model: GPT, *, weight_decay: float) -> list[dict[str, Any]]:
+    # AdamW's groups, split as in GPT-2 and nanoGPT: the matrices (linear and
+    # embedding weights) decay; the vectors (biases, LayerNorm's scale and shift)
+    # don't. parameters() lists the tied lm_head/embedding matrix once
+    matrices = [p for p in model.parameters() if p.dim() >= 2]
+    vectors = [p for p in model.parameters() if p.dim() < 2]
+    return [
+        {"params": matrices, "weight_decay": weight_decay},
+        {"params": vectors, "weight_decay": 0.0},
+    ]
 
 
 def autocast(device: torch.device):
@@ -113,19 +127,21 @@ def train(
     model: GPT,
     (train_data=, val_data=): DataSplit,
     (
-        batch_size=, max_steps=, max_lr=, min_lr=, warmup_steps=,
-        eval_interval=, eval_iters=,
+        batch_size=, max_steps=, max_lr=, min_lr=, weight_decay=,
+        warmup_steps=, eval_interval=, eval_iters=,
     ): TrainConfig,
     *,
     save_best: (path: Path, gpt_cfg: GPTConfig) | None = None,
     run: Run | None = None,
 ):
-    # AdamW with lr from lr_at, set before every step; evaluate every eval_interval
-    # steps and once at the end.
+    # AdamW with lr from lr_at, set before every step, and weight decay on the
+    # matrices only (param_groups); evaluate every eval_interval steps and once at
+    # the end.
     # save_best: checkpoint the model at each new lowest val loss, since val can
     # rise again before the last step
     # run: log every evaluation, then the best val loss and total time as a summary
-    opt = torch.optim.AdamW(model.parameters(), lr=max_lr)  # overwritten each step
+    groups = param_groups(model, weight_decay=)
+    opt = torch.optim.AdamW(groups, lr=max_lr)  # lr overwritten each step
     history: list[EvalRow] = []
     best_val_loss = math.inf
     best_step = 0
@@ -201,6 +217,7 @@ if __name__ == "__main__":
     train_cfg: TrainConfig = (
         batch_size=32, max_steps=500,
         max_lr=3e-3, min_lr=3e-4,
+        weight_decay=0.1,
         warmup_steps=10,
         eval_interval=100,
         eval_iters=20,

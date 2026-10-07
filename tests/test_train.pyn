@@ -15,6 +15,7 @@ from train import (
     batch_loss,
     full_val_loss,
     lr_at,
+    param_groups,
     sampled_train_loss,
     train,
 )
@@ -169,10 +170,53 @@ def test_warmup_must_leave_steps_to_decay():
         lr_at(0, **no_decay)
 
 
+def names(model: GPT, params: list[torch.nn.Parameter]) -> list[str]:
+    # each parameter's name in the model, matched by identity
+    return [name for name, p in model.named_parameters() if any(p is q for q in params)]
+
+
+def test_matrices_decay_and_vectors_dont(cfg: GPTConfig):
+    one_block = GPT(cfg._replace(n_layer=1))  # every name fits on the page
+    decay, no_decay = param_groups(one_block, weight_decay=0.1)
+    assert decay["weight_decay"] == 0.1
+    assert no_decay["weight_decay"] == 0.0
+    # the embeddings and every linear weight; lm_head.weight is the token
+    # embedding (tied), so it's in once, under the embedding's name
+    assert names(one_block, decay["params"]) == [
+        "token_embedding_table.weight",
+        "position_embedding_table.weight",
+        "blocks.0.attn.qkv.weight",
+        "blocks.0.attn.proj.weight",
+        "blocks.0.ffwd.up.weight",
+        "blocks.0.ffwd.down.weight",
+    ]
+    # biases and both LayerNorm vectors (scale is .weight, shift is .bias);
+    # qkv has no bias
+    assert names(one_block, no_decay["params"]) == [
+        "blocks.0.ln1.weight",
+        "blocks.0.ln1.bias",
+        "blocks.0.ln2.weight",
+        "blocks.0.ln2.bias",
+        "blocks.0.attn.proj.bias",
+        "blocks.0.ffwd.up.bias",
+        "blocks.0.ffwd.down.bias",
+        "ln_f.weight",
+        "ln_f.bias",
+    ]
+
+
+def test_every_parameter_is_in_exactly_one_group(model: GPT):
+    decay, no_decay = param_groups(model, weight_decay=0.1)
+    grouped = names(model, decay["params"]) + names(model, no_decay["params"])
+    every = [name for name, _ in model.named_parameters()]
+    assert sorted(grouped) == sorted(every)
+
+
 # a short run on the trivially learnable ids
 train_cfg: TrainConfig = (
     batch_size=16, max_steps=60,
     max_lr=1e-2, min_lr=1e-3,
+    weight_decay=0.1,
     warmup_steps=5,
     eval_interval=20,
     eval_iters=5,
