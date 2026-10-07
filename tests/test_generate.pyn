@@ -58,6 +58,7 @@ def test_trained_model_continues_the_pattern(model: GPT, cfg: GPTConfig, ids: Te
         batch_size=16, max_steps=200,
         max_lr=1e-2, min_lr=1e-3,
         weight_decay=0.1,
+        grad_clip=1.0,
         warmup_steps=10,
         eval_interval=200,
         eval_iters=5,

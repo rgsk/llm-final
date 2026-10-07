@@ -17,6 +17,7 @@ type TrainConfig = (
     batch_size: int, max_steps: int,
     max_lr: float, min_lr: float,
     weight_decay: float,
+    grad_clip: float,
     warmup_steps: int,
     eval_interval: int,
     eval_iters: int,
@@ -75,6 +76,23 @@ def batch_loss(model: GPT, x: Tensor, y: Tensor) -> Tensor:
         return F.cross_entropy(logits.view(B * T, V), y.view(B * T))
 
 
+def train_step(
+    model: GPT, opt: torch.optim.Optimizer, x: Tensor, y: Tensor, *, grad_clip: float
+) -> Tensor:
+    # x: [B, T]
+    # y: [B, T]
+    # out: [], the gradient norm before clipping
+    # zero, backprop, clip, update. Clipping treats every gradient as one long
+    # vector and scales it down to norm grad_clip when it's longer, so one bad
+    # batch can't throw the weights far; the direction is kept
+    loss = batch_loss(model, x, y)
+    opt.zero_grad()  # grads accumulate otherwise
+    loss.backward()
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+    opt.step()
+    return grad_norm
+
+
 @torch.no_grad()
 def full_val_loss(model: GPT, val_data: Tensor, *, batch_size: int) -> float:
     # val_data: [N]
@@ -127,7 +145,7 @@ def train(
     model: GPT,
     (train_data=, val_data=): DataSplit,
     (
-        batch_size=, max_steps=, max_lr=, min_lr=, weight_decay=,
+        batch_size=, max_steps=, max_lr=, min_lr=, weight_decay=, grad_clip=,
         warmup_steps=, eval_interval=, eval_iters=,
     ): TrainConfig,
     *,
@@ -135,8 +153,8 @@ def train(
     run: Run | None = None,
 ):
     # AdamW with lr from lr_at, set before every step, and weight decay on the
-    # matrices only (param_groups); evaluate every eval_interval steps and once at
-    # the end.
+    # matrices only (param_groups); gradients clipped to norm grad_clip
+    # (train_step); evaluate every eval_interval steps and once at the end.
     # save_best: checkpoint the model at each new lowest val loss, since val can
     # rise again before the last step
     # run: log every evaluation, then the best val loss and total time as a summary
@@ -145,16 +163,24 @@ def train(
     history: list[EvalRow] = []
     best_val_loss = math.inf
     best_step = 0
+    # the largest pre-clip grad norm since the last eval: a spike shows even when
+    # it falls between evals. Kept on the device, so no host sync per step
+    max_grad_norm = torch.tensor(0.0, device=model.device)
     start = time.perf_counter()
 
     def evaluate(step: int):
-        nonlocal best_val_loss, best_step
+        nonlocal best_val_loss, best_step, max_grad_norm
         train_loss = sampled_train_loss(
             model, train_data, batch_size=, iters=eval_iters
         )
         val_loss = full_val_loss(model, val_data, batch_size=)
         lr: float = opt.param_groups[0]["lr"]  # the lr of the latest step
-        row: EvalRow = (step=, lr=, train_loss=, val_loss=)
+        # nan at step 0: no step has run yet
+        grad_norm = max_grad_norm.item() if step > 0 else math.nan
+        max_grad_norm = torch.tensor(0.0, device=model.device)
+        row: EvalRow = (
+            step=, lr=, train_loss=, val_loss=, grad_norm=
+        )
         history.append(row)
         is_best = val_loss < best_val_loss
         # elapsed includes evaluation; .item() above already waited for the GPU
@@ -163,7 +189,7 @@ def train(
             run.log(row, elapsed_s=elapsed)
         print(
             f"step {step:>5}  lr {lr:.2e}  train {train_loss:.3f}  val {val_loss:.3f}"
-            + f"  {elapsed:6.1f}s"
+            + f"  grad {grad_norm:.2f}  {elapsed:6.1f}s"
             + ("  *" if is_best else "")
         )
         if is_best:
@@ -185,11 +211,8 @@ def train(
             block_size=model.block_size,
             device=model.device,
         )
-        loss = batch_loss(model, x, y)
-        # zero, backprop, update: grads accumulate otherwise
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
+        grad_norm = train_step(model, opt, x, y, grad_clip=)
+        max_grad_norm = torch.maximum(max_grad_norm, grad_norm)
     evaluate(max_steps)
     if run is not None:
         total_time_s = time.perf_counter() - start
@@ -218,6 +241,7 @@ if __name__ == "__main__":
         batch_size=32, max_steps=500,
         max_lr=3e-3, min_lr=3e-4,
         weight_decay=0.1,
+        grad_clip=1.0,
         warmup_steps=10,
         eval_interval=100,
         eval_iters=20,

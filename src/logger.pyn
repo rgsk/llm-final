@@ -15,8 +15,11 @@ import wandb
 
 from paths import LOG_DIR
 
-# what train records at each evaluation
-type EvalRow = (step: int, lr: float, train_loss: float, val_loss: float)
+# what train records at each evaluation. grad_norm: the largest gradient norm,
+# before clipping, over the steps since the last evaluation
+type EvalRow = (
+    step: int, lr: float, train_loss: float, val_loss: float, grad_norm: float
+)
 
 
 class Tee(io.TextIOBase):
@@ -97,16 +100,18 @@ class Run:
 
     def log(
         self,
-        (step=, lr=, train_loss=, val_loss=): EvalRow,
+        (step=, lr=, train_loss=, val_loss=, grad_norm=): EvalRow,
         *,
         elapsed_s: float,
     ):
-        # namespaced names: wandb groups loss/*, time/* and memory/* into sections.
-        # not system/*: that section charts only the metrics wandb collects itself
+        # namespaced names: wandb groups loss/*, grad/*, time/* and memory/* into
+        # sections. not system/*: that section charts only the metrics wandb
+        # collects itself
         metrics: dict[str, float] = {
             "loss/train": train_loss,
             "loss/val": val_loss,
             "lr": lr,
+            "grad/max_norm": grad_norm,
             "time/elapsed_s": elapsed_s,
         }
         if torch.cuda.is_available():

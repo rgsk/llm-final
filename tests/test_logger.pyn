@@ -28,7 +28,7 @@ def test_offline_is_a_real_wandb_run(tmp_path: Path):
 
 
 def test_jsonl_holds_config_rows_summary_then_end(tmp_path: Path):
-    row: EvalRow = (step=10, lr=1e-3, train_loss=2.0, val_loss=2.5)
+    row: EvalRow = (step=10, lr=1e-3, train_loss=2.0, val_loss=2.5, grad_norm=0.8)
     with Run("test", {"lr": 1e-3}, online=False, log_dir=tmp_path) as run:
         run.log(row, elapsed_s=4.0)
         run.summary(best_val_loss=2.5)
@@ -41,6 +41,7 @@ def test_jsonl_holds_config_rows_summary_then_end(tmp_path: Path):
         "loss/train": 2.0,
         "loss/val": 2.5,
         "lr": 1e-3,
+        "grad/max_norm": 0.8,
         "time/elapsed_s": 4.0,
     }
     assert summary == {"event": "summary", "best_val_loss": 2.5}
@@ -71,6 +72,7 @@ def test_train_logs_every_eval_and_a_summary(model: GPT, ids: Tensor, tmp_path: 
         batch_size=16, max_steps=60,
         max_lr=1e-2, min_lr=1e-3,
         weight_decay=0.1,
+        grad_clip=1.0,
         warmup_steps=5,
         eval_interval=20,
         eval_iters=5,
@@ -81,6 +83,9 @@ def test_train_logs_every_eval_and_a_summary(model: GPT, ids: Tensor, tmp_path: 
     # one line per history row, same step and val loss
     assert [line["step"] for line in logs] == [0, 20, 40, 60]
     assert [line["loss/val"] for line in logs] == [h.val_loss for h in history]
+    # no step before the first eval: its grad norm is nan, written as null
+    is_null = [line["grad/max_norm"] is None for line in logs]
+    assert is_null == [True, False, False, False]
     best = min(history, key=lambda h: h.val_loss)
     assert summary["best_val_loss"] == best.val_loss
     assert summary["best_step"] == best.step
