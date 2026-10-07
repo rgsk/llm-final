@@ -212,6 +212,47 @@ def test_every_parameter_is_in_exactly_one_group(model: GPT):
     assert sorted(grouped) == sorted(every)
 
 
+def left_after_decay(lrs: list[float], *, weight_decay: float) -> float:
+    # a weight the loss doesn't care about: its gradient is always 0, so Adam's
+    # update is 0 and only the decay moves it. Starts at 1, so what's returned is
+    # the fraction left
+    w = torch.nn.Parameter(torch.ones(4))
+    opt = torch.optim.AdamW([w], weight_decay=)
+    for lr in lrs:
+        opt.param_groups[0]["lr"] = lr
+        w.grad = torch.zeros_like(w)  # 0, not None: AdamW skips a None grad
+        opt.step()
+    return w[0].item()
+
+
+# explaination in src/notes/weight_decay.md
+def test_decay_alone_shrinks_a_weight_by_24_percent_over_mains_run():
+    # main's schedule and weight decay
+    schedule = (warmup_steps=100, max_steps=5000, max_lr=1e-3, min_lr=1e-4)
+    weight_decay = 0.1
+    lrs = [lr_at(s, **schedule) for s in range(schedule.max_steps)]
+    left = left_after_decay(lrs, weight_decay=)
+    # each step multiplies w by (1 - lr * weight_decay); over the run that's
+    # e^(-weight_decay * sum of lrs), and the sum is steps x the average lr
+    assert left == pytest.approx(math.exp(-weight_decay * sum(lrs)), rel=1e-4)
+    # the same in numbers: the average lr is ~5.5e-4, the cosine's midpoint
+    # between 1e-3 and 1e-4, and 76% of the weight is left: 24% decayed away
+    assert sum(lrs) / len(lrs) == pytest.approx(5.5e-4, rel=1e-2)
+    assert left == pytest.approx(0.76, abs=1e-2)
+
+    # twice the steps, same lr range: the cosine is stretched, its average lr
+    # stays the same, so the sum of lrs doubles (warmup is still 100 steps, so
+    # not quite) and so does the exponent. What's left is squared: 0.76^2
+    longer = schedule._replace(max_steps=2 * schedule.max_steps)
+    longer_lrs = [lr_at(s, **longer) for s in range(longer.max_steps)]
+    longer_left = left_after_decay(longer_lrs, weight_decay=)
+    assert sum(longer_lrs) / len(longer_lrs) == pytest.approx(5.5e-4, rel=1e-2)
+    assert sum(longer_lrs) == pytest.approx(2 * sum(lrs), rel=1e-2)
+    assert longer_left == pytest.approx(left**2, rel=1e-2)
+    # the same in numbers: 58% left, 42% decayed away
+    assert longer_left == pytest.approx(0.58, abs=1e-2)
+
+
 # a short run on the trivially learnable ids
 train_cfg: TrainConfig = (
     batch_size=16, max_steps=60,
