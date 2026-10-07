@@ -9,6 +9,7 @@ from torch import Tensor
 
 from checkpoint import save_checkpoint
 from data import DataSplit, get_batch
+from logger import EvalRow, Run
 from model import GPT, GPTConfig
 
 type TrainConfig = (
@@ -117,27 +118,33 @@ def train(
     ): TrainConfig,
     *,
     save_best: (path: Path, gpt_cfg: GPTConfig) | None = None,
+    run: Run | None = None,
 ):
     # AdamW with lr from lr_at, set before every step; evaluate every eval_interval
     # steps and once at the end.
     # save_best: checkpoint the model at each new lowest val loss, since val can
     # rise again before the last step
+    # run: log every evaluation, then the best val loss and total time as a summary
     opt = torch.optim.AdamW(model.parameters(), lr=max_lr)  # overwritten each step
-    history: list[(step: int, lr: float, train_loss: float, val_loss: float)] = []
+    history: list[EvalRow] = []
     best_val_loss = math.inf
+    best_step = 0
     start = time.perf_counter()
 
     def evaluate(step: int):
-        nonlocal best_val_loss
+        nonlocal best_val_loss, best_step
         train_loss = sampled_train_loss(
             model, train_data, batch_size=, iters=eval_iters
         )
         val_loss = full_val_loss(model, val_data, batch_size=)
         lr: float = opt.param_groups[0]["lr"]  # the lr of the latest step
-        history.append((step=, lr=, train_loss=, val_loss=))
+        row: EvalRow = (step=, lr=, train_loss=, val_loss=)
+        history.append(row)
         is_best = val_loss < best_val_loss
         # elapsed includes evaluation; .item() above already waited for the GPU
         elapsed = time.perf_counter() - start
+        if run is not None:
+            run.log(row, elapsed_s=elapsed)
         print(
             f"step {step:>5}  lr {lr:.2e}  train {train_loss:.3f}  val {val_loss:.3f}"
             + f"  {elapsed:6.1f}s"
@@ -145,6 +152,7 @@ def train(
         )
         if is_best:
             best_val_loss = val_loss
+            best_step = step
             if save_best is not None:
                 (path=, gpt_cfg=) = save_best
                 save_checkpoint(path, model, gpt_cfg, step=, val_loss=)
@@ -167,6 +175,9 @@ def train(
         loss.backward()
         opt.step()
     evaluate(max_steps)
+    if run is not None:
+        total_time_s = time.perf_counter() - start
+        run.summary(best_val_loss=, best_step=, total_time_s=)
     return history
 
 

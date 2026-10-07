@@ -14,3 +14,4 @@ ROOT = repo_root()
 DATA_DIR = ROOT / "data"
 SHAKESPEARE = DATA_DIR / "input.txt"  # tiny shakespeare, ~1.1M chars
 CKPT_DIR = ROOT / "artifacts" / "checkpoints"  # artifacts/ is gitignored
+LOG_DIR = ROOT / "artifacts" / "logs"  # .log and .jsonl per run, wandb's run folders

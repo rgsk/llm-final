@@ -40,5 +40,8 @@
         // don't swallow print() from passing tests -- the test explorer only
         // ever shows what pytest itself writes out
         "-rP"
-    ]
+    ],
+    "files.readonlyInclude": {
+        "**/*.jsonl": true
+    }
 }

@@ -5,6 +5,7 @@ import torch
 from checkpoint import load_checkpoint
 from data import split
 from generate import generate
+from logger import Run
 from model import GPT
 from paths import CKPT_DIR, SHAKESPEARE
 from tokenizer import CharTokenizer
@@ -34,13 +35,20 @@ if __name__ == "__main__":
     )
     model = GPT(gpt_cfg).to(device)
     ckpt_path = CKPT_DIR / "main.pt"
-    train(model, data, train_cfg, save_best=(path=ckpt_path, gpt_cfg=))
+    # every hyperparameter, for wandb's config table
+    config = {**gpt_cfg, **train_cfg}
+    with Run("main", config) as run:
+        train(
+            model, data, train_cfg, save_best=(path=ckpt_path, gpt_cfg=), run=
+        )
+        run.log_checkpoint(ckpt_path)  # the best one: save_best overwrote the rest
 
-    # the best val loss can come before the last step: sample from that model
-    (model=, step=, val_loss=) = load_checkpoint(ckpt_path, device=)
-    print(f"best checkpoint: step {step}, val {val_loss:.3f}")
+        # inside the run, so the sample lands in its .log too.
+        # the best val loss can come before the last step: sample from that model
+        (model=, step=, val_loss=) = load_checkpoint(ckpt_path, device=)
+        print(f"best checkpoint: step {step}, val {val_loss:.3f}")
 
-    # start from a single newline; 500 new chars runs well past block_size
-    prompt = torch.tensor([tok.encode("\n")], device=)  # [1, 1]
-    out = generate(model, prompt, max_new_tokens=500)  # [1, 501]
-    print(tok.decode(out[0].tolist()))
+        # start from a single newline; 500 new chars runs well past block_size
+        prompt = torch.tensor([tok.encode("\n")], device=)  # [1, 1]
+        out = generate(model, prompt, max_new_tokens=500)  # [1, 501]
+        print(tok.decode(out[0].tolist()))
