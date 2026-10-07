@@ -72,11 +72,13 @@ class Run:
         # readable with jq, no wandb sync needed
         self.path = log_dir / f"{self.name}.jsonl"
         self.write({"event": "config", **config})
+        # silent in setup, not init: init logs in, printing "Loaded credentials",
+        # before it applies its own settings
+        wandb.setup(settings=wandb.Settings(silent=True))
         # wandb writes its run folder to log_dir/wandb
         self.wandb_run = wandb.init(
             project=, name=self.name, config=, dir=log_dir,
             mode="online" if online else "offline",
-            settings=wandb.Settings(silent=True),
         )
         # after init: wandb's Logs tab records the console from init on
         print(self.name)

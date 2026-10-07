@@ -27,7 +27,7 @@ if __name__ == "__main__":
         dropout=0.2,
     )
     train_cfg: TrainConfig = (
-        batch_size=64, max_steps=5000,
+        batch_size=64, max_steps=2000,
         max_lr=1e-3, min_lr=1e-4,
         weight_decay=0.1,
         warmup_steps=100,
