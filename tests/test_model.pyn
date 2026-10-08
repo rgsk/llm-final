@@ -8,14 +8,8 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from model import (
-    GPT,
-    Block,
-    FeedForward,
-    FlashAttention,
-    GPTConfig,
-    ResidualProj,
-    apply_rope,
-    rope_angles,
+    GPT, Block, FeedForward, FlashAttention, GPTConfig,
+    ResidualProj, apply_rope, rope_angles,
 )
 
 
