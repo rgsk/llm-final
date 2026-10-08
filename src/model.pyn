@@ -144,7 +144,7 @@ class GPT(nn.Module):
     def forward(self, idx: Tensor) -> Tensor:
         # idx: [B, T]
         # out: [B, T, V]
-        _, T = idx.shape
+        B, T = idx.shape
         # learned absolute positions, and there are only block_size of them
         assert T <= self.block_size, (
             f"sequence length {T} exceeds block_size {self.block_size}"

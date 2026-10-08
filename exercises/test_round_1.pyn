@@ -1,0 +1,83 @@
+# round 1: parameter counts, the lr schedule, causal attention by hand.
+# replace each ___ with your answer, worked out on paper before running, and
+# fill in my_attention until its test passes
+import torch
+import torch.nn.functional as F
+from einops import rearrange
+from torch import Tensor, nn
+
+from model import GPT, GPTConfig
+from train import lr_at
+
+
+def n_params(module: nn.Module) -> int:
+    return sum(p.numel() for p in module.parameters())
+
+
+def test_predict_param_counts():
+    cfg: GPTConfig = (
+        vocab_size=10, block_size=8, n_embed=16, n_head=2, n_layer=2, dropout=0.0
+    )
+    model = GPT(cfg)
+    (vocab_size=V, n_embed=E, block_size=T, n_layer=) = cfg
+    tok_embed = V * E
+    assert n_params(model.token_embedding_table) == tok_embed
+    pos_embed = T * E
+    assert n_params(model.position_embedding_table) == pos_embed
+    # ln1, attention (qkv and proj), ln2, feed-forward (up and down)
+    # layer-norm: weight: [E] + bias: [E]
+    # linear: weight: [out, in] + bias: [out]
+    ln1 = E + E
+    qkv = E * 3 * E  # bias=False
+    proj = E * E + E
+    attn = qkv + proj
+    ln2 = E + E
+    up = E * 4 * E + 4 * E
+    down = 4 * E * E + E
+    ffwd = up + down
+    block = ln1 + attn + ln2 + ffwd
+    assert n_params(model.blocks[0]) == block
+    ln_f = E + E
+    assert n_params(model.ln_f) == ln_f
+    # the whole model; think about what lm_head adds
+    lm_head = 0  # because weights are tied with token_embedding_table, and bias=False
+    total = tok_embed + pos_embed + n_layer * block + ln_f + lm_head
+    assert n_params(model) == total
+
+
+def test_predict_lr_schedule():
+    warmup_steps = 4
+    max_steps = 10
+    max_lr = 1.0
+    min_lr = 0.1
+    lr_cfg = (warmup_steps=, max_steps=, max_lr=, min_lr=)
+    assert lr_at(0, **lr_cfg) == max_lr * 1 / warmup_steps
+    assert lr_at(3, **lr_cfg) == max_lr
+    assert lr_at(4, **lr_cfg) == max_lr
+    assert lr_at(9, **lr_cfg) == min_lr
+    assert lr_at(10, **lr_cfg) == min_lr
+
+
+def my_attention(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+    # q, k, v: [B, nh, T, hs]
+    # out: [B, nh, T, hs]
+    # causal, no dropout, same as F.scaled_dot_product_attention with
+    # is_causal=True; plain tensor ops only
+    B, nh, T, hs = q.shape
+    scores: Tensor = (
+        q @ rearrange(k, "B nh T hs -> B nh hs T") * hs**-0.5
+    )  # [B, nh, T, T]
+    causal = torch.ones(T, T, dtype=torch.bool, device=q.device).tril()
+    scores = scores.masked_fill(~causal, -torch.inf)
+    weights = F.softmax(scores, dim=-1)
+    out = weights @ v  # [B, nh, T, hs]
+    return out
+
+
+def test_my_attention_matches_sdpa():
+    B, nh, T, hs = 2, 3, 5, 4
+    q = torch.randn(B, nh, T, hs)
+    k = torch.randn(B, nh, T, hs)
+    v = torch.randn(B, nh, T, hs)
+    expected = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+    assert torch.allclose(my_attention(q, k, v), expected, atol=1e-6)

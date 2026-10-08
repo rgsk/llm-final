@@ -37,6 +37,8 @@
     "python.testing.unittestEnabled": false,
     "python.testing.pytestArgs": [
         "tests",
+        // plain `pytest` runs tests/ only (testpaths); listed here for the gutter buttons
+        "exercises",
         // don't swallow print() from passing tests -- the test explorer only
         // ever shows what pytest itself writes out
         "-rP"

@@ -37,8 +37,9 @@ dev = [
 byname = { path = "../byname", editable = true }
 
 [tool.ruff]
-# keep in step with dev-mode-dirs above and extraPaths below
-src = ["src"]
+# keep in step with dev-mode-dirs above and extraPaths below; exercises/ too, so
+# its `from blank import ___` sorts as a local import
+src = ["src", "exercises"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
