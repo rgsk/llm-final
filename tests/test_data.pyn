@@ -1,4 +1,4 @@
-# split and get_batch, on arange data: each id equals its position, so a slice's
+# split and get_batch, on arange data. Each id equals its position, so a slice's
 # values show exactly where it was cut from
 import pytest
 import torch
@@ -9,7 +9,7 @@ from data import get_batch, split
 
 @pytest.fixture
 def ids():
-    return torch.arange(100)  # [100]: 0, 1, ..., 99
+    return torch.arange(100)  # [100], 0, 1, ..., 99
 
 
 def test_split_sizes(ids: Tensor):
@@ -33,7 +33,7 @@ def test_batch_shape(ids: Tensor):
 def test_y_is_x_shifted_by_one(ids: Tensor):
     x, y = get_batch(ids, batch_size=16, block_size=8)  # each [16, 8]
     assert torch.equal(y[:, :-1], x[:, 1:])
-    assert torch.equal(y, x + 1)  # arange: the next id is always the current id + 1
+    assert torch.equal(y, x + 1)  # arange, so the next id is always the current id + 1
 
 
 def test_rows_are_contiguous_slices(ids: Tensor):

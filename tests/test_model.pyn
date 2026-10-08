@@ -33,8 +33,8 @@ def test_longer_than_block_size_fails(model: GPT, cfg: GPTConfig):
 
 
 def test_causal(model: GPT, cfg: GPTConfig):
-    # change the token at pos: logits before pos must not move, the rest must
-    pos = cfg.block_size // 2  # mid-sequence: positions on both sides
+    # change the token at pos. Logits before pos must not move, the rest must
+    pos = cfg.block_size // 2  # mid-sequence, so there are positions on both sides
     ids = random_ids(cfg)  # [B, T]
     changed = ids.clone()
     changed[:, pos] = (changed[:, pos] + 1) % cfg.vocab_size
@@ -57,7 +57,7 @@ def test_dropout_is_random_in_train_mode(dropout_model: GPT, cfg: GPTConfig):
 
 
 def test_dropout_is_off_in_eval_mode(dropout_model: GPT, cfg: GPTConfig):
-    # covers the attention weights too: dropout_p there is zeroed by hand
+    # covers the attention weights too, where dropout_p is zeroed by hand
     ids = random_ids(cfg)  # [B, T]
     dropout_model.eval()
     assert torch.equal(dropout_model(ids), dropout_model(ids))
@@ -71,7 +71,7 @@ def test_zero_dropout_is_deterministic_in_train_mode(model: GPT, cfg: GPTConfig)
 
 def test_device_follows_to(model: GPT):
     assert model.device == torch.device("cpu")
-    # the meta device holds shapes but no data: moves without a GPU
+    # the meta device holds shapes but no data, so the move needs no GPU
     model.to("meta")
     assert model.device == torch.device("meta")
 
@@ -159,8 +159,8 @@ def test_residual_projections_start_smaller():
 
 
 def test_overfits_one_batch(model: GPT, cfg: GPTConfig):
-    # random targets have no pattern, so loss -> 0 means the model memorized them:
-    # forward, loss, backward and optimizer step all work end to end
+    # random targets have no pattern, so loss -> 0 means the model memorized them,
+    # which shows forward, loss, backward and optimizer step all work end to end
     x, y = random_ids(cfg, batch_size=4), random_ids(cfg, batch_size=4)  # each [B, T]
     opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
 

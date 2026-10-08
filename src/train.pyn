@@ -34,7 +34,7 @@ def lr_at(
         f"warmup_steps {warmup_steps} leaves no decay before step {last_step}"
     )
     if step < warmup_steps:
-        # step + 1: step 0 already takes one warmup step, so no step has lr 0
+        # step + 1 so that step 0 is already a warmup step and no step has lr 0
         return max_lr * (step + 1) / warmup_steps
     if step >= max_steps:  # past the run
         return min_lr
@@ -44,7 +44,7 @@ def lr_at(
 
 
 def param_groups(model: GPT, *, weight_decay: float) -> list[dict[str, Any]]:
-    # AdamW's groups, split as in GPT-2 and nanoGPT: the matrices (linear and
+    # AdamW's groups, split as in GPT-2 and nanoGPT. The matrices (linear and
     # embedding weights) decay; the vectors (biases, LayerNorm's scale and shift)
     # don't. parameters() lists the tied lm_head/embedding matrix once
     matrices = [p for p in model.parameters() if p.dim() >= 2]
@@ -56,10 +56,10 @@ def param_groups(model: GPT, *, weight_decay: float) -> list[dict[str, Any]]:
 
 
 def autocast(device: torch.device):
-    # bf16 on GPU, chosen per op: matmuls (attention included) run in bf16,
+    # bf16 on GPU, chosen per op. Matmuls (attention included) run in bf16,
     # layer norm and the loss in fp32, and the stored weights stay fp32.
-    # bf16 has fp32's exponent range, so gradients don't underflow: no GradScaler.
-    # off on CPU, where bf16 is slower
+    # bf16 has fp32's exponent range, so gradients don't underflow, hence no
+    # GradScaler. Off on CPU, where bf16 is slower
     return torch.autocast(
         device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
     )
@@ -82,12 +82,12 @@ def train_step(
     # x: [B, T]
     # y: [B, T]
     # out: [], the gradient norm before clipping
-    # zero, backprop, clip, update. Clipping treats every gradient as one long
-    # vector and scales it down to norm grad_clip when it's longer, so one bad
-    # batch can't throw the weights far; the direction is kept
     loss = batch_loss(model, x, y)
     opt.zero_grad()  # grads accumulate otherwise
     loss.backward()
+    # treats every gradient as one long vector and scales it down to norm
+    # grad_clip when it's longer, so one bad batch can't throw the weights far;
+    # the direction is kept
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
     opt.step()
     return grad_norm
@@ -96,19 +96,19 @@ def train_step(
 @torch.no_grad()
 def full_val_loss(model: GPT, val_data: Tensor, *, batch_size: int) -> float:
     # val_data: [N]
-    # exact loss over the whole val split: back-to-back windows, no sampling
+    # exact loss over the whole val split, from back-to-back windows, not sampled
     was_training = model.training
     model.eval()
     device = model.device
     T = model.block_size
-    # -1: the last window's targets need one id past its inputs
+    # -1 because the last window's targets need one id past its inputs
     n_windows = (len(val_data) - 1) // T
     assert n_windows > 0, (
         f"val_data has {len(val_data)} ids, need more than block_size {T}"
     )
     xs = val_data[: n_windows * T].view(n_windows, T)  # [W, T]
     ys = val_data[1 : n_windows * T + 1].view(n_windows, T)  # [W, T]
-    # summed on the device: no host sync per batch
+    # summed on the device, so no host sync per batch
     total = torch.tensor(0.0, device=)
     count = 0
     for i in range(0, n_windows, batch_size):
@@ -126,7 +126,7 @@ def sampled_train_loss(
     model: GPT, train_data: Tensor, *, batch_size: int, iters: int
 ) -> float:
     # train_data: [N]
-    # the train split is too big for a full pass: average a few random batches
+    # the train split is too big for a full pass, so average a few random batches
     was_training = model.training
     model.eval()
     losses: list[Tensor] = []
@@ -152,19 +152,14 @@ def train(
     save_best: (path: Path, gpt_cfg: GPTConfig) | None = None,
     run: Run | None = None,
 ):
-    # AdamW with lr from lr_at, set before every step, and weight decay on the
-    # matrices only (param_groups); gradients clipped to norm grad_clip
-    # (train_step); evaluate every eval_interval steps and once at the end.
-    # save_best: checkpoint the model at each new lowest val loss, since val can
-    # rise again before the last step
-    # run: log every evaluation, then the best val loss and total time as a summary
+    # AdamW, evaluated every eval_interval steps and once at the end
     groups = param_groups(model, weight_decay=)
     opt = torch.optim.AdamW(groups, lr=max_lr)  # lr overwritten each step
     history: list[EvalRow] = []
     best_val_loss = math.inf
     best_step = 0
-    # the largest pre-clip grad norm since the last eval: a spike shows even when
-    # it falls between evals. Kept on the device, so no host sync per step
+    # the largest pre-clip grad norm since the last eval, so a spike shows even
+    # when it falls between evals. Kept on the device, so no host sync per step
     max_grad_norm = torch.tensor(0.0, device=model.device)
     start = time.perf_counter()
 
@@ -175,7 +170,7 @@ def train(
         )
         val_loss = full_val_loss(model, val_data, batch_size=)
         lr: float = opt.param_groups[0]["lr"]  # the lr of the latest step
-        # nan at step 0: no step has run yet
+        # nan at step 0 because no step has run yet
         grad_norm = max_grad_norm.item() if step > 0 else math.nan
         max_grad_norm = torch.tensor(0.0, device=model.device)
         row: EvalRow = (
@@ -195,6 +190,8 @@ def train(
         if is_best:
             best_val_loss = val_loss
             best_step = step
+            # at every new best, not only at the end, because val can rise
+            # again before the last step
             if save_best is not None:
                 (path=, gpt_cfg=) = save_best
                 save_checkpoint(path, model, gpt_cfg, step=, val_loss=)

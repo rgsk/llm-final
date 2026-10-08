@@ -1,4 +1,4 @@
-# end to end on tiny shakespeare: tokenize, split, train a GPT, then sample from
+# end to end on tiny shakespeare. Tokenize, split, train a GPT, then sample from
 # the best checkpoint
 import torch
 
@@ -43,10 +43,10 @@ if __name__ == "__main__":
         train(
             model, data, train_cfg, save_best=(path=ckpt_path, gpt_cfg=), run=
         )
-        run.log_checkpoint(ckpt_path)  # the best one: save_best overwrote the rest
+        run.log_checkpoint(ckpt_path)  # the best, since save_best overwrote the rest
 
         # inside the run, so the sample lands in its .log too.
-        # the best val loss can come before the last step: sample from that model
+        # the best val loss can come before the last step, so sample from that model
         (model=, step=, val_loss=) = load_checkpoint(ckpt_path, device=)
         print(f"best checkpoint: step {step}, val {val_loss:.3f}")
 

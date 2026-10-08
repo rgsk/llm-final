@@ -54,7 +54,7 @@ def test_jsonl_holds_config_rows_summary_then_end(tmp_path: Path):
 
 
 def test_nan_and_inf_are_written_as_null(tmp_path: Path):
-    # Python's json would write NaN and Infinity, which aren't JSON: jq rejects them
+    # Python's json would write NaN and Infinity, which aren't JSON, so jq rejects them
     with Run("test", {}, online=False, log_dir=tmp_path) as run:
         run.summary(diverged=math.nan, best=math.inf)
     _, summary, _ = read_lines(run)
@@ -83,7 +83,7 @@ def test_train_logs_every_eval_and_a_summary(model: GPT, ids: Tensor, tmp_path: 
     # one line per history row, same step and val loss
     assert [line["step"] for line in logs] == [0, 20, 40, 60]
     assert [line["loss/val"] for line in logs] == [h.val_loss for h in history]
-    # no step before the first eval: its grad norm is nan, written as null
+    # no step before the first eval, so its grad norm is nan, written as null
     is_null = [line["grad/max_norm"] is None for line in logs]
     assert is_null == [True, False, False, False]
     best = min(history, key=lambda h: h.val_loss)
@@ -135,7 +135,7 @@ def test_ctrl_c_ends_the_log_with_one_line_not_a_traceback(tmp_path: Path):
     *_, error_line, status = run.log_path.read_text().splitlines()
     assert error_line == "KeyboardInterrupt"
     assert status == "run interrupted"
-    # where Ctrl+C landed says nothing: no traceback
+    # no traceback, because where Ctrl+C landed says nothing
     assert "Traceback" not in run.log_path.read_text()
     *_, end = read_lines(run)
     assert end == {

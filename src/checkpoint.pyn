@@ -12,7 +12,7 @@ from model import GPT, GPTConfig
 def save_checkpoint(
     path: Path, model: GPT, gpt_cfg: GPTConfig, *, step: int, val_loss: float
 ) -> None:
-    # the config goes in as a plain dict: weights_only loading refuses
+    # the config goes in as a plain dict, because weights_only loading refuses
     # arbitrary classes, records included
     ckpt = {
         "model": model.state_dict(),
@@ -21,7 +21,7 @@ def save_checkpoint(
         "val_loss": val_loss,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    # write aside, then rename: a crash mid-write leaves the old file intact
+    # write aside, then rename, so a crash mid-write leaves the old file intact
     tmp = path.with_suffix(".tmp")
     torch.save(ckpt, tmp)
     tmp.replace(path)
@@ -32,7 +32,7 @@ def load_checkpoint(
 ) -> (model: GPT, gpt_cfg: GPTConfig, step: int, val_loss: float):
     # weights_only: unpickle tensors and plain containers, never arbitrary code
     ckpt: dict[str, Any] = torch.load(path, map_location=device, weights_only=True)
-    # names and types checked at runtime: a file saved before a GPTConfig field
+    # names and types checked at runtime, so a file saved before a GPTConfig field
     # existed raises here, naming the missing field
     gpt_cfg = record(GPTConfig, ckpt["gpt_cfg"])
     # rebuild the architecture from the file, then fill in its weights

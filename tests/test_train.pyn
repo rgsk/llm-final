@@ -60,11 +60,11 @@ def test_batch_loss_runs_in_bf16_on_gpu(model: GPT, cfg: GPTConfig, ids: Tensor)
     )
     loss = batch_loss(model, x, y)
     assert logit_dtypes == [torch.bfloat16]
-    # same forward without autocast: fp32 throughout
+    # same forward without autocast, so fp32 throughout
     logits = model(x)  # [B, T, V]
     B, T, V = logits.shape
     fp32_loss = F.cross_entropy(logits.view(B * T, V), y.view(B * T))  # []
-    # bf16 keeps 8 mantissa bits: ~2-3 significant digits
+    # bf16 keeps 8 mantissa bits, so only ~2-3 significant digits
     assert loss.item() == pytest.approx(fp32_loss.item(), rel=1e-2)
 
 
@@ -102,7 +102,7 @@ def test_full_val_loss_needs_more_than_one_window(model: GPT, cfg: GPTConfig):
 def test_sampled_train_loss_is_mean_of_random_batches(
     model: GPT, cfg: GPTConfig, ids: Tensor
 ):
-    # same seed twice: draw the exact batches sampled_train_loss drew
+    # same seed twice, so these are the exact batches sampled_train_loss drew
     torch.manual_seed(0)
     sampled = sampled_train_loss(model, ids, batch_size=4, iters=5)
     torch.manual_seed(0)
@@ -123,14 +123,14 @@ def test_evaluation_restores_mode(model: GPT, ids: Tensor, training: bool):
     assert model.training is training
 
 
-# lr_at's settings; spread into it as **lr_cfg. Steps 0 .. 99 run: warmup on
-# 0 .. 4, decay on 5 .. 99
+# lr_at's settings; spread into it as **lr_cfg. Steps 0 .. 99 run, with warmup
+# on 0 .. 4 and decay on 5 .. 99
 lr_cfg = (warmup_steps=5, max_steps=100, max_lr=1e-2, min_lr=1e-3)
 
 
 def test_warmup_starts_at_one_step_and_reaches_max_lr():
     (warmup_steps=, max_lr=) = lr_cfg
-    # step 0 already takes one warmup step: 1e-2 / 5
+    # step 0 already takes one warmup step, so the lr is 1e-2 / 5
     assert lr_at(0, **lr_cfg) == max_lr / warmup_steps
     assert lr_at(0, **lr_cfg) == 2.0e-3
     assert lr_at(warmup_steps - 1, **lr_cfg) == pytest.approx(max_lr)
@@ -141,7 +141,7 @@ def test_decay_starts_at_max_lr_and_ends_at_min_lr():
     # no jump where warmup ends
     assert lr_at(warmup_steps, **lr_cfg) == pytest.approx(max_lr)
     last_step = max_steps - 1
-    # the last step that runs: cos(pi) is exactly -1, so exactly min_lr
+    # the last step that runs. cos(pi) is exactly -1, so exactly min_lr
     assert lr_at(last_step, **lr_cfg) == min_lr
     assert lr_at(last_step, **lr_cfg) == 1e-3
     assert lr_at(max_steps, **lr_cfg) == min_lr  # past the run, it stays there
@@ -163,7 +163,7 @@ def test_cosine_is_halfway_at_the_midpoint_of_decay():
 
 
 def test_warmup_must_leave_steps_to_decay():
-    # 11 steps run (0 .. 10) and warmup takes 0 .. 9: step 10 alone can't decay
+    # 11 steps run (0 .. 10) and warmup takes 0 .. 9, so step 10 alone can't decay
     no_decay = lr_cfg._replace(warmup_steps=10, max_steps=11)
     with pytest.raises(
         AssertionError, match="warmup_steps 10 leaves no decay before step 10"
@@ -214,14 +214,14 @@ def test_every_parameter_is_in_exactly_one_group(model: GPT):
 
 
 def left_after_decay(lrs: list[float], *, weight_decay: float) -> float:
-    # a weight the loss doesn't care about: its gradient is always 0, so Adam's
+    # a weight the loss doesn't care about. Its gradient is always 0, so Adam's
     # update is 0 and only the decay moves it. Starts at 1, so what's returned is
     # the fraction left
     w = torch.nn.Parameter(torch.ones(4))
     opt = torch.optim.AdamW([w], weight_decay=)
     for lr in lrs:
         opt.param_groups[0]["lr"] = lr
-        w.grad = torch.zeros_like(w)  # 0, not None: AdamW skips a None grad
+        w.grad = torch.zeros_like(w)  # 0, not None, because AdamW skips a None grad
         opt.step()
     return w[0].item()
 
@@ -237,13 +237,13 @@ def test_decay_alone_shrinks_a_weight_by_24_percent_over_mains_run():
     # e^(-weight_decay * sum of lrs), and the sum is steps x the average lr
     assert left == pytest.approx(math.exp(-weight_decay * sum(lrs)), rel=1e-4)
     # the same in numbers: the average lr is ~5.5e-4, the cosine's midpoint
-    # between 1e-3 and 1e-4, and 76% of the weight is left: 24% decayed away
+    # between 1e-3 and 1e-4, and 76% of the weight is left, so 24% decayed away
     assert sum(lrs) / len(lrs) == pytest.approx(5.5e-4, rel=1e-2)
     assert left == pytest.approx(0.76, abs=1e-2)
 
-    # twice the steps, same lr range: the cosine is stretched, its average lr
+    # twice the steps, same lr range. The cosine is stretched and its average lr
     # stays the same, so the sum of lrs doubles (warmup is still 100 steps, so
-    # not quite) and so does the exponent. What's left is squared: 0.76^2
+    # not quite) and so does the exponent. Hence what's left is squared, 0.76^2
     longer = schedule._replace(max_steps=2 * schedule.max_steps)
     longer_lrs = [lr_at(s, **longer) for s in range(longer.max_steps)]
     longer_left = left_after_decay(longer_lrs, weight_decay=)
@@ -268,7 +268,7 @@ def test_train_step_scales_a_long_gradient_down_to_grad_clip(
     grad_clip = 0.01  # far below an untrained model's grad norm
     grad_norm = train_step(model, opt, x, y, grad_clip=)
     assert grad_norm.item() > grad_clip
-    # .grad still holds what opt.step() used: clipped to norm grad_clip
+    # .grad still holds what opt.step() used, clipped to norm grad_clip
     assert grad_norm_now(model) == pytest.approx(grad_clip, rel=1e-4)
 
 
@@ -307,7 +307,7 @@ def test_history_has_one_entry_per_eval(model: GPT, ids: Tensor):
 def test_grad_norm_is_nan_before_the_first_step_then_positive(model: GPT, ids: Tensor):
     history = train(model, split(ids), train_cfg)
     first, *rest = history
-    assert math.isnan(first.grad_norm)  # step 0: no step has run yet
+    assert math.isnan(first.grad_norm)  # nan at step 0 because no step has run yet
     assert all(h.grad_norm > 0 for h in rest)
 
 
@@ -341,8 +341,8 @@ def test_train_steps_with_the_scheduled_lr(model: GPT, ids: Tensor):
 def test_the_last_eval_holds_the_last_steps_lr_not_the_last_evals(
     model: GPT, ids: Tensor
 ):
-    # 19 steps, an eval every 4: evals at 16 and 19 are 3 steps apart, but their
-    # lrs are steps 16 and 18: the final eval sees the last step's lr (18)
+    # 19 steps, an eval every 4. Evals at 16 and 19 are 3 steps apart, but their
+    # lrs are steps 16 and 18, because the final eval sees the last step's lr (18)
     short_cfg = train_cfg._replace(max_steps=19, eval_interval=4)
     history = train(model, split(ids), short_cfg)
     assert [h.step for h in history] == [0, 4, 8, 12, 16, 19]

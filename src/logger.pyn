@@ -1,5 +1,5 @@
-# one training run's log, behind one small object: wandb, a .jsonl copy of what
-# wandb gets, and a .log copy of what the terminal shows
+# one training run's log, behind one small object. It goes to wandb, a .jsonl copy
+# of what wandb gets, and a .log copy of what the terminal shows
 import io
 import json
 import math
@@ -23,7 +23,7 @@ type EvalRow = (
 
 
 class Tee(io.TextIOBase):
-    # stands in for sys.stdout: each print goes to the terminal and to the file
+    # stands in for sys.stdout, so each print goes to the terminal and to the file
     def __init__(self, terminal: TextIO, file: TextIO):
         self.terminal = terminal
         self.file = file
@@ -52,8 +52,6 @@ def skip_printing_again(printed: BaseException):
 
 
 class Run:
-    # online=False runs wandb offline, not disabled: the run is still recorded and
-    # `wandb sync` can upload it later
     def __init__(
         self,
         name: str,
@@ -75,22 +73,24 @@ class Run:
         # readable with jq, no wandb sync needed
         self.path = log_dir / f"{self.name}.jsonl"
         self.write({"event": "config", **config})
-        # silent in setup, not init: init logs in, printing "Loaded credentials",
-        # before it applies its own settings
+        # silent in setup, not init, because init logs in, printing "Loaded
+        # credentials", before it applies its own settings
         wandb.setup(settings=wandb.Settings(silent=True))
-        # wandb writes its run folder to log_dir/wandb
+        # wandb writes its run folder to log_dir/wandb. online=False runs it
+        # offline, not disabled, so the run is still recorded and `wandb sync`
+        # can upload it later
         self.wandb_run = wandb.init(
             project=, name=self.name, config=, dir=log_dir,
             mode="online" if online else "offline",
         )
-        # after init: wandb's Logs tab records the console from init on
+        # after init, because wandb's Logs tab records the console from init on
         print(self.name)
         print("  ".join(f"{k}={v}" for k, v in config.items()))  # any:ok
         if online:
             print(f"wandb: {self.wandb_run.url}")
 
     def write(self, line: dict[str, Any]):
-        # NaN and inf as null: Python's json would write NaN, which jq rejects
+        # NaN and inf as null, because Python's json would write NaN, which jq rejects
         clean = {
             k: None if isinstance(v, float) and not math.isfinite(v) else v
             for k, v in line.items()  # any:ok
@@ -104,9 +104,9 @@ class Run:
         *,
         elapsed_s: float,
     ):
-        # namespaced names: wandb groups loss/*, grad/*, time/* and memory/* into
-        # sections. not system/*: that section charts only the metrics wandb
-        # collects itself
+        # namespaced names, so wandb groups loss/*, grad/*, time/* and memory/* into
+        # sections. Not system/*, because that section charts only the metrics
+        # wandb collects itself
         metrics: dict[str, float] = {
             "loss/train": train_loss,
             "loss/val": val_loss,
@@ -115,29 +115,27 @@ class Run:
             "time/elapsed_s": elapsed_s,
         }
         if torch.cuda.is_available():
-            # peak since the process started, not current: shows the largest batch
+            # peak since the process started, not current, so it shows the largest batch
             peak_bytes = torch.cuda.max_memory_allocated()
             metrics["memory/gpu_peak_gb"] = peak_bytes / 1e9
         self.write({"event": "log", "step": step, **metrics})
         self.wandb_run.log(metrics, step=)
 
     def summary(self, **numbers: float):
-        # one number for the whole run each: the wandb runs table sorts on these
+        # one number each for the whole run, which the wandb runs table sorts on
         self.write({"event": "summary", **numbers})
         self.wandb_run.summary.update(numbers)
 
     def log_checkpoint(self, path: Path):
-        # upload as a model artifact; online only: offline would copy the file into
-        # the run folder and upload it nowhere. finish() waits for the upload
+        # upload as a model artifact, online only, because offline would copy the file
+        # into the run folder and upload it nowhere. finish() waits for the upload
         if self.online:
             artifact = wandb.Artifact(path.stem, type="model")
             artifact.add_file(str(path))
             self.wandb_run.log_artifact(artifact)
 
     def finish(self, *, error: BaseException | None = None):
-        # the .log's last line says how the run ended; with no such line, the
-        # process was killed before it could write one
-        # exit codes as wandb's own exit hook sets them: 1 for an exception, 255
+        # exit codes as wandb's own exit hook sets them, 1 for an exception and 255
         # for Ctrl+C; anything but 0 marks the run failed in wandb
         if error is None:
             status, exit_code = "finished", 0
@@ -148,16 +146,18 @@ class Run:
         error_line = None
         traceback_text = None
         if error is not None:
-            # "ValueError: loss is nan": the line a traceback ends with
+            # the line a traceback ends with, e.g. "ValueError: loss is nan"
             error_line = traceback.format_exception_only(error)[0].strip()
             # printed here, so the terminal, the .log and wandb's Logs tab all get
-            # it. Ctrl+C gets only its line: where it landed says nothing
+            # it. Ctrl+C gets only its line, because where it landed says nothing
             if isinstance(error, KeyboardInterrupt):
                 print(error_line)
             else:
                 traceback_text = "".join(traceback.format_exception(error))
                 print(traceback_text, end="")
             skip_printing_again(error)
+        # the .log's last line says how the run ended; with no such line, the
+        # process was killed before it could write one
         print(f"run {status}")
         self.write(
             {

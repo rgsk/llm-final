@@ -9,5 +9,5 @@ from gpt_fixtures import cfg, ids, model  # noqa: F401
 
 @pytest.fixture(autouse=True)
 def _seed():
-    # same RNG state per test: random batches and inits are reproducible
+    # same RNG state per test, so random batches and inits are reproducible
     torch.manual_seed(0)

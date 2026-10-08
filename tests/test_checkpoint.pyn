@@ -49,7 +49,7 @@ def test_saving_again_overwrites_and_leaves_no_temp_file(
     save_checkpoint(ckpt_path, model, cfg, step=2, val_loss=1.0)
     (step=) = load_checkpoint(ckpt_path)
     assert step == 2
-    # save writes run.tmp, then renames it to run.pt: only run.pt should remain
+    # save writes run.tmp, then renames it to run.pt, so only run.pt should remain
     files_in_dir = [p.name for p in ckpt_path.parent.iterdir()]
     assert files_in_dir == ["run.pt"]
 

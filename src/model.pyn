@@ -45,9 +45,9 @@ class FlashAttention(nn.Module):
         q, k, v = rearrange(  # each [B, nh, T, hs]
             qkv, "B T (three nh hs) -> three B nh T hs", three=3, nh=self.n_head
         )
-        # fused causal attention (flash kernel on GPU): never materializes the
+        # fused causal attention (flash kernel on GPU), which never materializes the
         # [B, nh, T, T] score matrix; default scale is 1/sqrt(hs).
-        # a function, not a module: it can't see eval(), so turn dropout off by hand
+        # a function, not a module, so it can't see eval(); turn dropout off by hand
         dropout_p = self.dropout if self.training else 0.0
         out: Tensor = F.scaled_dot_product_attention(  # [B, nh, T, hs]
             q, k, v, is_causal=True, dropout_p=
@@ -132,8 +132,8 @@ class GPT(nn.Module):
             if isinstance(module, nn.Linear):
                 std = 0.02
                 if isinstance(module, ResidualProj):
-                    # 2 residual adds per block: scale so the stream's variance
-                    # doesn't grow with depth
+                    # 2 residual adds per block, so scale down to keep the
+                    # stream's variance from growing with depth
                     std /= math.sqrt(2 * self.n_layer)
                 module.weight.normal_(mean=0.0, std=)
                 if module.bias is not None:
@@ -145,7 +145,7 @@ class GPT(nn.Module):
         # idx: [B, T]
         # out: [B, T, V]
         _, T = idx.shape
-        # learned absolute positions: there are only block_size of them
+        # learned absolute positions, and there are only block_size of them
         assert T <= self.block_size, (
             f"sequence length {T} exceeds block_size {self.block_size}"
         )
@@ -156,7 +156,7 @@ class GPT(nn.Module):
         x = self.emb_dropout(x)
         for block in self.blocks:
             x = block(x)
-        # final norm, then a score per vocab token at every position:
+        # final norm, then a score per vocab token at every position.
         # logits[b, t] predicts the next token after idx[b, t]
         x = self.ln_f(x)
         logits: Tensor = self.lm_head(x)  # [B, T, V]
@@ -194,6 +194,6 @@ if __name__ == "__main__":
     B, T, V = logits.shape
     loss = F.cross_entropy(logits.view(B * T, V), y.view(B * T))  # []
     print(f"logits {tuple(logits.shape)}")
-    # untrained, so close to a uniform guess over the vocab: loss ≈ ln(V)
+    # untrained, so close to a uniform guess over the vocab, hence loss ≈ ln(V)
     uniform_loss = math.log(tok.vocab_size)
     print(f"initial loss {loss.item():.3f}  vs uniform {uniform_loss:.3f}")

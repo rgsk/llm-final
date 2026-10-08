@@ -20,5 +20,5 @@ def model(cfg: GPTConfig) -> GPT:
 
 @pytest.fixture
 def ids(cfg: GPTConfig) -> Tensor:
-    # next id is always current + 1 (mod V): trivially learnable
-    return torch.arange(400) % cfg.vocab_size  # [400]: 0, 1, ..., 19, 0, 1, ...
+    # next id is always current + 1 (mod V), so trivially learnable
+    return torch.arange(400) % cfg.vocab_size  # [400], 0, 1, ..., 19, 0, 1, ...
