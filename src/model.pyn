@@ -1,6 +1,6 @@
-# GPT (nanoGPT layout, RMSNorm in place of LayerNorm): token + position embeddings
-# -> n_layer pre-norm blocks (causal self-attention + MLP) -> final norm -> lm head
-# tied to the token embedding.
+# GPT (nanoGPT layout, with RMSNorm in place of LayerNorm and RoPE in place of
+# learned positions): token embeddings -> n_layer pre-norm blocks (causal
+# self-attention + MLP) -> final norm -> lm head tied to the token embedding.
 # dropout (training only) on the embeddings, the attention weights and each
 # sublayer's output before it joins the residual stream
 import math
@@ -26,6 +26,39 @@ class ResidualProj(nn.Linear):
     pass
 
 
+ROPE_BASE = 10000.0  # the RoFormer paper's; sets the slowest pair's wavelength
+
+
+def rope_angles(T: int, *, head_size: int, device: torch.device) -> tuple[Tensor, Tensor]:
+    # out: cos, sin each [T, hs/2], of pos * theta_i for pos 0 .. T-1
+    # one angle per pair of dims, theta_i = base^(-2i/hs) from 1 down to ~1/base,
+    # so early pairs turn fast with position and late pairs slowly
+    assert head_size % 2 == 0, (
+        f"head_size {head_size} is odd, but RoPE rotates dims in pairs"
+    )
+    two_i = torch.arange(0, head_size, 2, device=, dtype=torch.float32)  # [hs/2]
+    theta = ROPE_BASE ** (-two_i / head_size)  # [hs/2]
+    pos = torch.arange(T, device=, dtype=torch.float32)  # [T]
+    # fp32 even under autocast, which matters because bf16 can't hold an angle
+    # like 127.3 (its step there is 0.5)
+    angles = rearrange(pos, "T -> T 1") * theta  # [T, hs/2]
+    return angles.cos(), angles.sin()
+
+
+def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+    # x: [B, nh, T, hs]
+    # cos, sin: [T, hs/2]
+    # out: [B, nh, T, hs]
+    # rotates each pair (x[2i], x[2i+1]) at position t by the angle t * theta_i,
+    # the paper's 2x2 rotation
+    x1 = x[..., 0::2]  # [B, nh, T, hs/2], the first of each pair
+    x2 = x[..., 1::2]  # the second of each pair
+    out = torch.empty_like(x)
+    out[..., 0::2] = x1 * cos - x2 * sin
+    out[..., 1::2] = x1 * sin + x2 * cos
+    return out
+
+
 class FlashAttention(nn.Module):
     def __init__(self, *, n_embed: int, n_head: int, dropout: float):
         super().__init__()
@@ -38,14 +71,19 @@ class FlashAttention(nn.Module):
         self.proj = ResidualProj(n_embed, n_embed)
         self.resid_dropout = nn.Dropout(dropout)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
         # x: [B, T, E]
+        # cos, sin: [T, hs/2]
         # out: [B, T, E]
         # project to Q, K, V in one matmul, then split into heads
         qkv: Tensor = self.qkv(x)  # [B, T, 3E]
         q, k, v = rearrange(  # each [B, nh, T, hs]
             qkv, "B T (three nh hs) -> three B nh T hs", three=3, nh=self.n_head
         )
+        # position enters only here: q and k are rotated by their own positions,
+        # so the score q_m . k_n depends on the distance m - n. v isn't rotated
+        q = apply_rope(q, cos, sin)
+        k = apply_rope(k, cos, sin)
         # fused causal attention (flash kernel on GPU), which never materializes the
         # [B, nh, T, T] score matrix; default scale is 1/sqrt(hs).
         # a function, not a module, so it can't see eval(); turn dropout off by hand
@@ -86,12 +124,13 @@ class Block(nn.Module):
         self.attn = FlashAttention(n_embed=, n_head=, dropout=)
         self.ffwd = FeedForward(n_embed=, dropout=)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
         # x: [B, T, E]
+        # cos, sin: [T, hs/2]
         # out: [B, T, E]
         # pre-norm residuals: x + sublayer(norm(x)), so x itself is never normalized
         h: Tensor = self.norm1(x)
-        x = x + self.attn(h)  # tokens exchange information
+        x = x + self.attn(h, cos, sin)  # tokens exchange information
         h = self.norm2(x)
         x = x + self.ffwd(h)  # each token processed on its own
         return x
@@ -112,8 +151,8 @@ class GPT(nn.Module):
         super().__init__()
         self.n_layer = n_layer
         self.block_size = block_size
+        self.head_size = n_embed // n_head
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
-        self.position_embedding_table = nn.Embedding(block_size, n_embed)
         self.emb_dropout = nn.Dropout(dropout)
         self.blocks = nn.ModuleList(
             [Block(n_embed=, n_head=, dropout=) for _ in range(n_layer)]
@@ -148,17 +187,17 @@ class GPT(nn.Module):
         # idx: [B, T]
         # out: [B, T, V]
         B, T = idx.shape
-        # learned absolute positions, and there are only block_size of them
+        # RoPE could compute angles past block_size, but training never showed
+        # the model those positions
         assert T <= self.block_size, (
             f"sequence length {T} exceeds block_size {self.block_size}"
         )
         tok_emb: Tensor = self.token_embedding_table(idx)  # [B, T, E]
-        pos = torch.arange(T, device=idx.device)  # [T]
-        pos_emb: Tensor = self.position_embedding_table(pos)  # [T, E]
-        x: Tensor = tok_emb + pos_emb  # [B, T, E], pos_emb broadcast over B
-        x = self.emb_dropout(x)
+        x: Tensor = self.emb_dropout(tok_emb)
+        # computed once, shared by every layer
+        cos, sin = rope_angles(T, head_size=self.head_size, device=idx.device)
         for block in self.blocks:
-            x = block(x)
+            x = block(x, cos, sin)
         # final norm, then a score per vocab token at every position.
         # logits[b, t] predicts the next token after idx[b, t]
         x = self.norm_f(x)

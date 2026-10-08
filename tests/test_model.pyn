@@ -7,7 +7,16 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from model import GPT, Block, FeedForward, FlashAttention, GPTConfig, ResidualProj
+from model import (
+    GPT,
+    Block,
+    FeedForward,
+    FlashAttention,
+    GPTConfig,
+    ResidualProj,
+    apply_rope,
+    rope_angles,
+)
 
 
 def random_ids(cfg: GPTConfig, *, batch_size: int = 3) -> Tensor:
@@ -81,6 +90,59 @@ def test_attention_heads_split_n_embed_evenly():
         FlashAttention(n_embed=30, n_head=4, dropout=0.0)
 
 
+def rotated_at_every_position(v: Tensor, *, T: int) -> Tensor:
+    # v: [hs]
+    # out: [T, hs], row t is v rotated as if it sat at position t
+    (hs,) = v.shape
+    cos, sin = rope_angles(T, head_size=hs, device=v.device)  # each [T, hs/2]
+    x = v.expand(1, 1, T, hs)  # [B, nh, T, hs], the same v at every position
+    return apply_rope(x, cos, sin)[0, 0]
+
+
+def test_rope_score_depends_only_on_distance():
+    q = torch.randn(8)  # [hs]
+    k = torch.randn(8)  # [hs]
+    q_at = rotated_at_every_position(q, T=16)  # [T, hs]
+    k_at = rotated_at_every_position(k, T=16)  # [T, hs]
+    # query at m, key at n; the same distance m - n = 3 anywhere in the sequence
+    torch.testing.assert_close(q_at[5] @ k_at[2], q_at[15] @ k_at[12])
+    torch.testing.assert_close(q_at[5] @ k_at[2], q_at[3] @ k_at[0])
+    # a different distance gives a different score
+    assert not torch.allclose(q_at[5] @ k_at[2], q_at[5] @ k_at[4])
+    # so does swapping m and n, since 2 - 5 is -3, not 3. The rotation is signed,
+    # so a key 3 behind and a key 3 ahead (which the causal mask hides) differ
+    assert not torch.allclose(q_at[5] @ k_at[2], q_at[2] @ k_at[5])
+
+
+def test_rope_leaves_position_zero_unchanged():
+    v = torch.randn(8)  # [hs]
+    v_at = rotated_at_every_position(v, T=4)  # [T, hs]
+    # every angle at position 0 is 0, so cos is exactly 1 and sin exactly 0
+    assert torch.equal(v_at[0], v)
+    assert not torch.allclose(v_at[1], v)
+
+
+def test_rope_keeps_lengths():
+    v = torch.randn(8)  # [hs]
+    v_at = rotated_at_every_position(v, T=16)  # [T, hs]
+    # a rotation turns each pair without stretching it
+    lengths: Tensor = torch.linalg.vector_norm(v_at, dim=-1)  # [T]
+    torch.testing.assert_close(lengths, torch.linalg.vector_norm(v).expand(16))
+
+
+def test_rope_needs_an_even_head_size():
+    with pytest.raises(AssertionError, match="head_size 5 is odd"):
+        rope_angles(4, head_size=5, device=torch.device("cpu"))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="bf16 autocast is GPU-only")
+def test_rope_angles_stay_fp32_under_autocast():
+    # bf16's step near 127 is 0.5, so a bf16 angle would be off by up to 0.25 rad
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        cos, sin = rope_angles(128, head_size=32, device=torch.device("cuda"))
+    assert cos.dtype == sin.dtype == torch.float32
+
+
 def n_params(module: nn.Module) -> int:
     return sum(p.numel() for p in module.parameters())
 
@@ -145,15 +207,12 @@ def test_lm_head_tied_to_embedding(model: GPT):
 
 
 def test_gpt_params(model: GPT, cfg: GPTConfig):
-    (vocab_size=V, block_size=T, n_embed=E, n_layer=L) = cfg
+    (vocab_size=V, n_embed=E, n_layer=L) = cfg
     token_embedding = V * E
-    position_embedding = T * E
-    blocks = L * block_params(E)
+    blocks = L * block_params(E)  # RoPE adds no parameters
     final_norm = rms_norm_params(E)
     lm_head = 0  # tied to token_embedding, counted once
-    assert n_params(model) == (
-        token_embedding + position_embedding + blocks + final_norm + lm_head
-    )
+    assert n_params(model) == token_embedding + blocks + final_norm + lm_head
 
 
 def test_residual_projections_start_smaller():

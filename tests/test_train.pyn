@@ -185,7 +185,6 @@ def test_matrices_decay_and_vectors_dont(cfg: GPTConfig):
     # embedding (tied), so it's in once, under the embedding's name
     assert names(one_block, decay["params"]) == [
         "token_embedding_table.weight",
-        "position_embedding_table.weight",
         "blocks.0.attn.qkv.weight",
         "blocks.0.attn.proj.weight",
         "blocks.0.ffwd.up.weight",
