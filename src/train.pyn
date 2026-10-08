@@ -45,7 +45,7 @@ def lr_at(
 
 def param_groups(model: GPT, *, weight_decay: float) -> list[dict[str, Any]]:
     # AdamW's groups, split as in GPT-2 and nanoGPT. The matrices (linear and
-    # embedding weights) decay; the vectors (biases, LayerNorm's scale and shift)
+    # embedding weights) decay; the vectors (biases, the norms' scales)
     # don't. parameters() lists the tied lm_head/embedding matrix once
     matrices = [p for p in model.parameters() if p.dim() >= 2]
     vectors = [p for p in model.parameters() if p.dim() < 2]
@@ -57,7 +57,7 @@ def param_groups(model: GPT, *, weight_decay: float) -> list[dict[str, Any]]:
 
 def autocast(device: torch.device):
     # bf16 on GPU, chosen per op. Matmuls (attention included) run in bf16,
-    # layer norm and the loss in fp32, and the stored weights stay fp32.
+    # the norms and the loss in fp32, and the stored weights stay fp32.
     # bf16 has fp32's exponent range, so gradients don't underflow, hence no
     # GradScaler. Off on CPU, where bf16 is slower
     return torch.autocast(

@@ -44,6 +44,7 @@
         "-rP"
     ],
     "files.readonlyInclude": {
-        "**/*.jsonl": true
+        "**/*.jsonl": true,
+        "**/*.log": true,
     }
 }

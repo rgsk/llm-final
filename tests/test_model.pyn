@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from model import GPT, FeedForward, FlashAttention, GPTConfig, ResidualProj
+from model import GPT, Block, FeedForward, FlashAttention, GPTConfig, ResidualProj
 
 
 def random_ids(cfg: GPTConfig, *, batch_size: int = 3) -> Tensor:
@@ -111,14 +111,28 @@ def test_feed_forward_params(cfg: GPTConfig):
     assert n_params(ffwd) == feed_forward_params(cfg.n_embed)
 
 
-def layer_norm_params(E: int) -> int:
-    weight, bias = E, E
-    return weight + bias
+def test_rms_norm_formula(cfg: GPTConfig):
+    (n_embed=E, n_head=, dropout=) = cfg
+    norm = Block(n_embed=E, n_head=, dropout=).norm1
+    with torch.no_grad():
+        norm.weight.copy_(torch.randn(E))  # not its initial ones, so the scale counts
+    # off-center on purpose, so subtracting the mean would change the result
+    x = torch.randn(2, 3, E) + 2.0  # [B, T, E]
+    eps = torch.finfo(x.dtype).eps  # what nn.RMSNorm's default eps=None uses
+    mean_square = (x**2).mean(dim=-1, keepdim=True)  # [B, T, 1]
+    rms = torch.sqrt(mean_square + eps)
+    expected = x / rms * norm.weight
+    torch.testing.assert_close(norm(x), expected)
+
+
+def rms_norm_params(E: int) -> int:
+    weight = E  # no bias
+    return weight
 
 
 def block_params(E: int) -> int:
-    ln1, ln2 = layer_norm_params(E), layer_norm_params(E)
-    return ln1 + attention_params(E) + ln2 + feed_forward_params(E)
+    norm1, norm2 = rms_norm_params(E), rms_norm_params(E)
+    return norm1 + attention_params(E) + norm2 + feed_forward_params(E)
 
 
 def test_block_params(model: GPT, cfg: GPTConfig):
@@ -135,7 +149,7 @@ def test_gpt_params(model: GPT, cfg: GPTConfig):
     token_embedding = V * E
     position_embedding = T * E
     blocks = L * block_params(E)
-    final_norm = layer_norm_params(E)
+    final_norm = rms_norm_params(E)
     lm_head = 0  # tied to token_embedding, counted once
     assert n_params(model) == (
         token_embedding + position_embedding + blocks + final_norm + lm_head

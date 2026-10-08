@@ -191,18 +191,14 @@ def test_matrices_decay_and_vectors_dont(cfg: GPTConfig):
         "blocks.0.ffwd.up.weight",
         "blocks.0.ffwd.down.weight",
     ]
-    # biases and both LayerNorm vectors (scale is .weight, shift is .bias);
-    # qkv has no bias
+    # biases and the norms' scales (RMSNorm has no bias); qkv has no bias
     assert names(one_block, no_decay["params"]) == [
-        "blocks.0.ln1.weight",
-        "blocks.0.ln1.bias",
-        "blocks.0.ln2.weight",
-        "blocks.0.ln2.bias",
+        "blocks.0.norm1.weight",
+        "blocks.0.norm2.weight",
         "blocks.0.attn.proj.bias",
         "blocks.0.ffwd.up.bias",
         "blocks.0.ffwd.down.bias",
-        "ln_f.weight",
-        "ln_f.bias",
+        "norm_f.weight",
     ]
 
 

@@ -1,5 +1,6 @@
-# GPT (nanoGPT layout): token + position embeddings -> n_layer pre-norm blocks
-# (causal self-attention + MLP) -> final norm -> lm head tied to the token embedding.
+# GPT (nanoGPT layout, RMSNorm in place of LayerNorm): token + position embeddings
+# -> n_layer pre-norm blocks (causal self-attention + MLP) -> final norm -> lm head
+# tied to the token embedding.
 # dropout (training only) on the embeddings, the attention weights and each
 # sublayer's output before it joins the residual stream
 import math
@@ -78,8 +79,10 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     def __init__(self, *, n_embed: int, n_head: int, dropout: float):
         super().__init__()
-        self.ln1 = nn.LayerNorm(n_embed)
-        self.ln2 = nn.LayerNorm(n_embed)
+        # RMSNorm: x / sqrt(mean(x^2) + eps) * weight over E, a LayerNorm with no
+        # mean subtraction and no bias
+        self.norm1 = nn.RMSNorm(n_embed)
+        self.norm2 = nn.RMSNorm(n_embed)
         self.attn = FlashAttention(n_embed=, n_head=, dropout=)
         self.ffwd = FeedForward(n_embed=, dropout=)
 
@@ -87,9 +90,9 @@ class Block(nn.Module):
         # x: [B, T, E]
         # out: [B, T, E]
         # pre-norm residuals: x + sublayer(norm(x)), so x itself is never normalized
-        h: Tensor = self.ln1(x)
+        h: Tensor = self.norm1(x)
         x = x + self.attn(h)  # tokens exchange information
-        h = self.ln2(x)
+        h = self.norm2(x)
         x = x + self.ffwd(h)  # each token processed on its own
         return x
 
@@ -115,7 +118,7 @@ class GPT(nn.Module):
         self.blocks = nn.ModuleList(
             [Block(n_embed=, n_head=, dropout=) for _ in range(n_layer)]
         )
-        self.ln_f = nn.LayerNorm(n_embed)
+        self.norm_f = nn.RMSNorm(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size, bias=False)
         self.apply(self._init_weights)
         # weight tying: one [V, E] matrix both embeds tokens and scores them
@@ -158,7 +161,7 @@ class GPT(nn.Module):
             x = block(x)
         # final norm, then a score per vocab token at every position.
         # logits[b, t] predicts the next token after idx[b, t]
-        x = self.ln_f(x)
+        x = self.norm_f(x)
         logits: Tensor = self.lm_head(x)  # [B, T, V]
         return logits
 
