@@ -1,6 +1,7 @@
-# round 1: parameter counts, the lr schedule, causal attention by hand.
-# replace each ___ with your answer, worked out on paper before running, and
-# fill in my_attention until its test passes
+# round 1: parameter counts, the lr schedule, causal attention and cross
+# entropy by hand. replace each ___ with your answer, worked out on paper
+# before running, and fill in my_attention and my_cross_entropy until their
+# tests pass
 import torch
 import torch.nn.functional as F
 from einops import rearrange
@@ -80,3 +81,58 @@ def test_my_attention_matches_sdpa():
     v = torch.randn(B, nh, T, hs)
     expected = F.scaled_dot_product_attention(q, k, v, is_causal=True)
     assert torch.allclose(my_attention(q, k, v), expected, atol=1e-6)
+
+
+def cross_entropy_simple(logits: Tensor, targets: Tensor) -> Tensor:
+    """Textbook form: normalize to probabilities, then take log. Easier to read;
+    slightly less stable because it logs the small probs directly."""
+    N, V = logits.shape
+    exp = torch.exp(logits - logits.max(dim=-1, keepdim=True).values)
+    probs = exp / exp.sum(dim=-1, keepdim=True)
+    log_probs = torch.log(probs)
+    correct_log_probs = log_probs[torch.arange(N), targets]
+    return -correct_log_probs.mean()
+
+
+def log_softmax(x: Tensor, dim: int = -1) -> Tensor:
+    m = x.max(dim=dim, keepdim=True).values
+    z = x - m
+    return z - z.exp().sum(dim=dim, keepdim=True).log()  # log(sum(exp)) done stably
+
+
+def my_cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
+    # logits: [N, V]
+    # targets: [N], class indices
+    # out: [], mean over N of -log softmax(logits)[target], same as
+    # F.cross_entropy; plain tensor ops only, and stable for large logits
+    n = targets.size(0)
+    logp = log_softmax(logits, dim=-1)  # [N, V]
+    # ignored targets are not valid columns, so clamp them and drop them after
+    picked = logp[torch.arange(n), targets]  # [N], the true class's log-prob
+    return -picked.mean()
+
+
+def test_my_cross_entropy_matches_torch():
+    N, V = 6, 10
+    logits = torch.randn(N, V)
+    targets = torch.randint(V, (N,))
+    expected = F.cross_entropy(logits, targets)
+    assert torch.allclose(my_cross_entropy(logits, targets), expected, atol=1e-6)
+    # exp(1000) overflows float32, so a naive softmax gives inf/nan here
+    big_logits = logits * 1000
+    expected = F.cross_entropy(big_logits, targets)
+    assert torch.allclose(my_cross_entropy(big_logits, targets), expected, atol=1e-3)
+
+
+def test_cross_entropy_simple_matches_torch_until_probs_underflow():
+    N, V = 6, 10
+    logits = torch.randn(N, V)
+    targets = torch.randint(V, (N,))
+    expected = F.cross_entropy(logits, targets)
+    assert torch.allclose(cross_entropy_simple(logits, targets), expected, atol=1e-6)
+    # subtracting the max stops exp overflowing, but a target that isn't the max
+    # now has its prob underflow to 0, and log(0) is -inf, so the loss is inf
+    # where torch's is finite
+    big_logits = logits * 1000
+    assert torch.isfinite(F.cross_entropy(big_logits, targets))
+    assert cross_entropy_simple(big_logits, targets) == torch.inf
