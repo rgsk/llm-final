@@ -41,7 +41,9 @@ if __name__ == "__main__":
     config = {**gpt_cfg, **train_cfg}
     with Run("main", config) as run:
         train(
-            model, data, train_cfg, save_best=(path=ckpt_path, gpt_cfg=), run=
+            model, data=, train_cfg=,
+            save_best=(path=ckpt_path, gpt_cfg=),
+            run=,
         )
         run.log_checkpoint(ckpt_path)  # the best, since save_best overwrote the rest
 

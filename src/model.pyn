@@ -29,7 +29,9 @@ class ResidualProj(nn.Linear):
 ROPE_BASE = 10000.0  # the RoFormer paper's; sets the slowest pair's wavelength
 
 
-def rope_angles(T: int, *, head_size: int, device: torch.device) -> tuple[Tensor, Tensor]:
+def rope_angles(
+    T: int, *, head_size: int, device: torch.device
+) -> tuple[Tensor, Tensor]:
     # out: cos, sin each [T, hs/2], of pos * theta_i for pos 0 .. T-1
     # one angle per pair of dims, theta_i = base^(-2i/hs) from 1 down to ~1/base,
     # so early pairs turn fast with position and late pairs slowly
@@ -137,18 +139,12 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
-    def __init__(
-        self,
-        (
-            vocab_size=,
-            block_size=,
-            n_embed=,
-            n_head=,
-            n_layer=,
-            dropout=,
-        ): GPTConfig,
-    ):
+    def __init__(self, cfg: GPTConfig):
         super().__init__()
+        (
+            vocab_size=, block_size=, n_embed=,
+            n_head=, n_layer=, dropout=,
+        ) = cfg
         self.n_layer = n_layer
         self.block_size = block_size
         self.head_size = n_embed // n_head

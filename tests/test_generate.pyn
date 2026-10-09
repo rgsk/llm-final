@@ -63,7 +63,7 @@ def test_trained_model_continues_the_pattern(model: GPT, cfg: GPTConfig, ids: Te
         eval_interval=200,
         eval_iters=5,
     )
-    train(model, split(ids), train_cfg)
+    train(model, data=split(ids), train_cfg=)
 
     prompt = torch.tensor([[5, 6, 7]])  # [1, 3]
     out = generate(model, prompt, max_new_tokens=30)  # [1, 33]

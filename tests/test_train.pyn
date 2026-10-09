@@ -290,7 +290,7 @@ train_cfg: TrainConfig = (
 
 
 def test_history_has_one_entry_per_eval(model: GPT, ids: Tensor):
-    history = train(model, split(ids), train_cfg)
+    history = train(model, data=split(ids), train_cfg=)
     (max_steps=, eval_interval=) = train_cfg
     # every eval_interval steps inside the loop, then once more after the last step
     eval_steps = [*range(0, max_steps, eval_interval), max_steps]
@@ -300,21 +300,21 @@ def test_history_has_one_entry_per_eval(model: GPT, ids: Tensor):
 
 
 def test_grad_norm_is_nan_before_the_first_step_then_positive(model: GPT, ids: Tensor):
-    history = train(model, split(ids), train_cfg)
+    history = train(model, data=split(ids), train_cfg=)
     first, *rest = history
     assert math.isnan(first.grad_norm)  # nan at step 0 because no step has run yet
     assert all(h.grad_norm > 0 for h in rest)
 
 
 def test_training_lowers_val_loss(model: GPT, ids: Tensor):
-    history = train(model, split(ids), train_cfg)
+    history = train(model, data=split(ids), train_cfg=)
     first, last = history[0], history[-1]
     assert last.val_loss < first.val_loss / 2  # starts near ln(20) = 3.0
 
 
 def test_train_steps_with_the_scheduled_lr(model: GPT, ids: Tensor):
     # each eval records the lr the optimizer used for its latest step
-    history = train(model, split(ids), train_cfg)
+    history = train(model, data=split(ids), train_cfg=)
     (warmup_steps=, max_steps=, max_lr=, min_lr=, eval_interval=) = (
         train_cfg
     )
@@ -339,7 +339,7 @@ def test_the_last_eval_holds_the_last_steps_lr_not_the_last_evals(
     # 19 steps, an eval every 4. Evals at 16 and 19 are 3 steps apart, but their
     # lrs are steps 16 and 18, because the final eval sees the last step's lr (18)
     short_cfg = train_cfg._replace(max_steps=19, eval_interval=4)
-    history = train(model, split(ids), short_cfg)
+    history = train(model, data=split(ids), train_cfg=short_cfg)
     assert [h.step for h in history] == [0, 4, 8, 12, 16, 19]
     (warmup_steps=, max_steps=, max_lr=, min_lr=) = short_cfg
     lr_steps = [0, 4, 8, 12, 16, 18]

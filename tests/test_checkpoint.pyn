@@ -89,7 +89,8 @@ def test_save_best_keeps_the_lowest_val_loss(
         eval_iters=5,
     )
     history = train(
-        model, split(ids), train_cfg, save_best=(path=ckpt_path, gpt_cfg=cfg)
+        model, data=split(ids), train_cfg=,
+        save_best=(path=ckpt_path, gpt_cfg=cfg),
     )
     best = min(history, key=lambda h: h.val_loss)
     (step=, val_loss=) = load_checkpoint(ckpt_path)
