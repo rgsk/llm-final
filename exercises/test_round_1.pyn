@@ -19,29 +19,28 @@ def test_predict_param_counts():
         vocab_size=10, block_size=8, n_embed=16, n_head=2, n_layer=2, dropout=0.0
     )
     model = GPT(cfg)
-    (vocab_size=V, n_embed=E, block_size=T, n_layer=) = cfg
+    (vocab_size=V, n_embed=E, n_layer=) = cfg
     tok_embed = V * E
     assert n_params(model.token_embedding_table) == tok_embed
-    pos_embed = T * E
-    assert n_params(model.position_embedding_table) == pos_embed
-    # ln1, attention (qkv and proj), ln2, feed-forward (up and down)
-    # layer-norm: weight: [E] + bias: [E]
+    # no position table, because RoPE rotates q and k by fixed angles
+    # norm1, attention (qkv and proj), norm2, feed-forward (up and down)
+    # rms-norm: weight: [E], no bias
     # linear: weight: [out, in] + bias: [out]
-    ln1 = E + E
+    norm1 = E
     qkv = E * 3 * E  # bias=False
     proj = E * E + E
     attn = qkv + proj
-    ln2 = E + E
+    norm2 = E
     up = E * 4 * E + 4 * E
     down = 4 * E * E + E
     ffwd = up + down
-    block = ln1 + attn + ln2 + ffwd
+    block = norm1 + attn + norm2 + ffwd
     assert n_params(model.blocks[0]) == block
-    ln_f = E + E
-    assert n_params(model.ln_f) == ln_f
+    norm_f = E
+    assert n_params(model.norm_f) == norm_f
     # the whole model; think about what lm_head adds
     lm_head = 0  # because weights are tied with token_embedding_table, and bias=False
-    total = tok_embed + pos_embed + n_layer * block + ln_f + lm_head
+    total = tok_embed + n_layer * block + norm_f + lm_head
     assert n_params(model) == total
 
 

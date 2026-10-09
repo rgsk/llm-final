@@ -43,6 +43,8 @@
         // ever shows what pytest itself writes out
         "-rP"
     ],
+    // re-discover on save so gutter ticks follow line shifts; the default is **/*.py, which skips .pyn
+    "python.testing.autoTestDiscoverOnSavePattern": "**/*.{py,pyn}",
     "files.readonlyInclude": {
         "**/*.jsonl": true,
         "**/*.log": true,
