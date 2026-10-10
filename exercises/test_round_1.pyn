@@ -1,7 +1,7 @@
-# round 1: parameter counts, the lr schedule, causal attention and cross
-# entropy by hand. replace each ___ with your answer, worked out on paper
-# before running, and fill in my_attention and my_cross_entropy until their
-# tests pass
+# round 1: parameter counts, the lr schedule, causal attention, softmax and
+# cross entropy by hand. replace each ___ with your answer, worked out on paper
+# before running, and fill in my_attention, my_softmax and my_cross_entropy
+# until their tests pass
 import torch
 import torch.nn.functional as F
 from einops import rearrange
@@ -50,12 +50,12 @@ def test_predict_lr_schedule():
     max_steps = 10
     max_lr = 1.0
     min_lr = 0.1
-    lr_cfg = (warmup_steps=, max_steps=, max_lr=, min_lr=)
-    assert lr_at(0, **lr_cfg) == max_lr * 1 / warmup_steps
-    assert lr_at(3, **lr_cfg) == max_lr
-    assert lr_at(4, **lr_cfg) == max_lr
-    assert lr_at(9, **lr_cfg) == min_lr
-    assert lr_at(10, **lr_cfg) == min_lr
+    schedule = (warmup_steps=, max_steps=, max_lr=, min_lr=)
+    assert lr_at(0, schedule=) == max_lr * 1 / warmup_steps
+    assert lr_at(3, schedule=) == max_lr
+    assert lr_at(4, schedule=) == max_lr
+    assert lr_at(9, schedule=) == min_lr
+    assert lr_at(10, schedule=) == min_lr
 
 
 def my_attention(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
@@ -83,9 +83,46 @@ def test_my_attention_matches_sdpa():
     assert torch.allclose(my_attention(q, k, v), expected, atol=1e-6)
 
 
+def softmax_simple(x: Tensor, dim: int = -1) -> Tensor:
+    # textbook form, exp then normalize; exp overflows for large x
+    exp = x.exp()
+    return exp / exp.sum(dim=dim, keepdim=True)
+
+
+def my_softmax(x: Tensor, dim: int = -1) -> Tensor:
+    # x: [N, V]
+    # out: [N, V], each row sums to 1, same as F.softmax; plain tensor ops
+    # only, and stable for large x
+    m = x.max(dim=dim, keepdim=True).values
+    e = (x - m).exp()  # subtracting the max: exp() now peaks at exp(0) == 1
+    return e / e.sum(dim=dim, keepdim=True)
+
+
+def test_my_softmax_matches_torch():
+    N, V = 6, 10
+    logits = torch.randn(N, V)
+    expected = F.softmax(logits, dim=-1)
+    assert torch.allclose(my_softmax(logits, dim=-1), expected, atol=1e-6)
+    # exp(1000) overflows float32, so a softmax that doesn't shift x gives nan
+    big_logits = logits * 1000
+    expected = F.softmax(big_logits, dim=-1)
+    assert torch.allclose(my_softmax(big_logits, dim=-1), expected, atol=1e-6)
+
+
+def test_softmax_simple_matches_torch_until_exp_overflows():
+    N, V = 6, 10
+    logits = torch.randn(N, V)
+    expected = F.softmax(logits, dim=-1)
+    assert torch.allclose(softmax_simple(logits, dim=-1), expected, atol=1e-6)
+    # the row's max logit is in the hundreds, exp of it is inf, and inf / inf
+    # is nan
+    big_logits = logits * 1000
+    assert torch.isfinite(F.softmax(big_logits, dim=-1)).all()
+    assert softmax_simple(big_logits, dim=-1).isnan().any()
+
+
 def cross_entropy_simple(logits: Tensor, targets: Tensor) -> Tensor:
-    """Textbook form: normalize to probabilities, then take log. Easier to read;
-    slightly less stable because it logs the small probs directly."""
+    # textbook form, softmax then log; a prob that underflows to 0 logs to -inf
     N, V = logits.shape
     exp = torch.exp(logits - logits.max(dim=-1, keepdim=True).values)
     probs = exp / exp.sum(dim=-1, keepdim=True)
