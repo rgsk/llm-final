@@ -123,7 +123,7 @@ def test_evaluation_restores_mode(model: GPT, ids: Tensor, training: bool):
     assert model.training is training
 
 
-# lr_at's settings; spread into it as **lr_cfg. Steps 0 .. 99 run, with warmup
+# lr_at's schedule, passed as schedule=lr_cfg. Steps 0 .. 99 run, with warmup
 # on 0 .. 4 and decay on 5 .. 99
 lr_cfg = (warmup_steps=5, max_steps=100, max_lr=1e-2, min_lr=1e-3)
 
@@ -131,26 +131,26 @@ lr_cfg = (warmup_steps=5, max_steps=100, max_lr=1e-2, min_lr=1e-3)
 def test_warmup_starts_at_one_step_and_reaches_max_lr():
     (warmup_steps=, max_lr=) = lr_cfg
     # step 0 already takes one warmup step, so the lr is 1e-2 / 5
-    assert lr_at(0, **lr_cfg) == max_lr / warmup_steps
-    assert lr_at(0, **lr_cfg) == 2.0e-3
-    assert lr_at(warmup_steps - 1, **lr_cfg) == pytest.approx(max_lr)
+    assert lr_at(0, schedule=lr_cfg) == max_lr / warmup_steps
+    assert lr_at(0, schedule=lr_cfg) == 2.0e-3
+    assert lr_at(warmup_steps - 1, schedule=lr_cfg) == pytest.approx(max_lr)
 
 
 def test_decay_starts_at_max_lr_and_ends_at_min_lr():
     (warmup_steps=, max_steps=, max_lr=, min_lr=) = lr_cfg
     # no jump where warmup ends
-    assert lr_at(warmup_steps, **lr_cfg) == pytest.approx(max_lr)
+    assert lr_at(warmup_steps, schedule=lr_cfg) == pytest.approx(max_lr)
     last_step = max_steps - 1
     # the last step that runs. cos(pi) is exactly -1, so exactly min_lr
-    assert lr_at(last_step, **lr_cfg) == min_lr
-    assert lr_at(last_step, **lr_cfg) == 1e-3
-    assert lr_at(max_steps, **lr_cfg) == min_lr  # past the run, it stays there
+    assert lr_at(last_step, schedule=lr_cfg) == min_lr
+    assert lr_at(last_step, schedule=lr_cfg) == 1e-3
+    assert lr_at(max_steps, schedule=lr_cfg) == min_lr  # past the run, it stays there
 
 
 def test_lr_rises_through_warmup_then_only_falls():
     (warmup_steps=, max_steps=) = lr_cfg
-    warmup = [lr_at(s, **lr_cfg) for s in range(warmup_steps)]
-    decay = [lr_at(s, **lr_cfg) for s in range(warmup_steps, max_steps)]
+    warmup = [lr_at(s, schedule=lr_cfg) for s in range(warmup_steps)]
+    decay = [lr_at(s, schedule=lr_cfg) for s in range(warmup_steps, max_steps)]
     assert all(a < b for a, b in pairwise(warmup))
     assert all(a > b for a, b in pairwise(decay))
 
@@ -158,8 +158,8 @@ def test_lr_rises_through_warmup_then_only_falls():
 def test_cosine_is_halfway_at_the_midpoint_of_decay():
     (warmup_steps=, max_steps=, max_lr=, min_lr=) = lr_cfg
     midpoint = (warmup_steps + max_steps - 1) // 2  # 52, halfway through 5 .. 99
-    assert lr_at(midpoint, **lr_cfg) == pytest.approx((max_lr + min_lr) / 2)
-    assert lr_at(midpoint, **lr_cfg) == pytest.approx(5.5e-3)
+    assert lr_at(midpoint, schedule=lr_cfg) == pytest.approx((max_lr + min_lr) / 2)
+    assert lr_at(midpoint, schedule=lr_cfg) == pytest.approx(5.5e-3)
 
 
 def test_warmup_must_leave_steps_to_decay():
@@ -168,7 +168,7 @@ def test_warmup_must_leave_steps_to_decay():
     with pytest.raises(
         AssertionError, match="warmup_steps 10 leaves no decay before step 10"
     ):
-        lr_at(0, **no_decay)
+        lr_at(0, schedule=no_decay)
 
 
 def names(model: GPT, params: list[torch.nn.Parameter]) -> list[str]:
@@ -226,7 +226,7 @@ def test_decay_alone_shrinks_a_weight_by_24_percent_over_mains_run():
     # main's schedule and weight decay
     schedule = (warmup_steps=100, max_steps=5000, max_lr=1e-3, min_lr=1e-4)
     weight_decay = 0.1
-    lrs = [lr_at(s, **schedule) for s in range(schedule.max_steps)]
+    lrs = [lr_at(s, schedule=) for s in range(schedule.max_steps)]
     left = left_after_decay(lrs, weight_decay=)
     # each step multiplies w by (1 - lr * weight_decay); over the run that's
     # e^(-weight_decay * sum of lrs), and the sum is steps x the average lr
@@ -240,7 +240,7 @@ def test_decay_alone_shrinks_a_weight_by_24_percent_over_mains_run():
     # stays the same, so the sum of lrs doubles (warmup is still 100 steps, so
     # not quite) and so does the exponent. Hence what's left is squared, 0.76^2
     longer = schedule._replace(max_steps=2 * schedule.max_steps)
-    longer_lrs = [lr_at(s, **longer) for s in range(longer.max_steps)]
+    longer_lrs = [lr_at(s, schedule=longer) for s in range(longer.max_steps)]
     longer_left = left_after_decay(longer_lrs, weight_decay=)
     assert sum(longer_lrs) / len(longer_lrs) == pytest.approx(5.5e-4, rel=1e-2)
     assert sum(longer_lrs) == pytest.approx(2 * sum(lrs), rel=1e-2)
@@ -315,16 +315,11 @@ def test_training_lowers_val_loss(model: GPT, ids: Tensor):
 def test_train_steps_with_the_scheduled_lr(model: GPT, ids: Tensor):
     # each eval records the lr the optimizer used for its latest step
     history = train(model, data=split(ids), train_cfg=)
-    (warmup_steps=, max_steps=, max_lr=, min_lr=, eval_interval=) = (
-        train_cfg
-    )
+    (max_steps=, eval_interval=) = train_cfg
     # an eval inside the loop follows setting its step's lr; the final eval, after
     # the loop, still holds the last step's (max_steps - 1)
     lr_steps = [*range(0, max_steps, eval_interval), max_steps - 1]
-    expected = [
-        lr_at(s, warmup_steps=, max_steps=, max_lr=, min_lr=)
-        for s in lr_steps
-    ]
+    expected = [lr_at(s, schedule=train_cfg) for s in lr_steps]
     assert [h.lr for h in history] == pytest.approx(expected)
     # the same in numbers: warmup 5 steps to 1e-2, then cosine down to exactly
     # min_lr (1e-3) on step 59, the last step
@@ -341,12 +336,8 @@ def test_the_last_eval_holds_the_last_steps_lr_not_the_last_evals(
     short_cfg = train_cfg._replace(max_steps=19, eval_interval=4)
     history = train(model, data=split(ids), train_cfg=short_cfg)
     assert [h.step for h in history] == [0, 4, 8, 12, 16, 19]
-    (warmup_steps=, max_steps=, max_lr=, min_lr=) = short_cfg
     lr_steps = [0, 4, 8, 12, 16, 18]
-    expected = [
-        lr_at(s, warmup_steps=, max_steps=, max_lr=, min_lr=)
-        for s in lr_steps
-    ]
+    expected = [lr_at(s, schedule=short_cfg) for s in lr_steps]
     lrs = [h.lr for h in history]
     assert lrs == pytest.approx(expected)
     # in numbers: step 4 ends the 5-step warmup at 1e-2, then the decay reaches
