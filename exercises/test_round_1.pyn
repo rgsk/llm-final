@@ -1,13 +1,14 @@
 # round 1: parameter counts, the lr schedule, causal attention, softmax and
 # cross entropy by hand. replace each ___ with your answer, worked out on paper
 # before running, and fill in my_attention, my_softmax and my_cross_entropy
-# until their tests pass
+# until their tests pass. the last section, why attention needs positions and
+# how a position table and RoPE give them, is worked out already
 import torch
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor, nn
 
-from model import GPT, GPTConfig
+from model import GPT, GPTConfig, apply_rope, rope_angles
 from train import lr_at
 
 
@@ -173,3 +174,112 @@ def test_cross_entropy_simple_matches_torch_until_probs_underflow():
     big_logits = logits * 1000
     assert torch.isfinite(F.cross_entropy(big_logits, targets))
     assert cross_entropy_simple(big_logits, targets) == torch.inf
+
+
+# attention and positions. one head with hs = E, so x needs no head split
+T, E = 6, 8
+reverse = torch.arange(T).flip(0)  # token order 5 .. 0
+shift = 100  # positions 100 .. 105 in place of 0 .. 5
+
+type QKVWeights = (wq: Tensor, wk: Tensor, wv: Tensor)
+
+
+def random_qkv() -> QKVWeights:
+    # scaled by E**-0.5 so that q and k entries stay near 1 and softmax isn't
+    # saturated
+    return (
+        wq=torch.randn(E, E) * E**-0.5,
+        wk=torch.randn(E, E) * E**-0.5,
+        wv=torch.randn(E, E) * E**-0.5,
+    )
+
+
+def one_head_attention(
+    x: Tensor,
+    w: QKVWeights,
+    *,
+    causal: bool,
+    rope: (cos: Tensor, sin: Tensor) | None = None,
+) -> Tensor:
+    # x: [T, E]
+    # out: [T, E]
+    # rope, when given, rotates q and k by their positions as FlashAttention does
+    (wq=, wk=, wv=) = w
+    q = rearrange(x @ wq, "T hs -> 1 1 T hs")  # [1, 1, T, hs], apply_rope's layout
+    k = rearrange(x @ wk, "T hs -> 1 1 T hs")
+    v = rearrange(x @ wv, "T hs -> 1 1 T hs")
+    if rope is not None:
+        (cos=, sin=) = rope
+        q = apply_rope(q, cos, sin)
+        k = apply_rope(k, cos, sin)
+    out = F.scaled_dot_product_attention(q, k, v, is_causal=causal)
+    return out[0, 0]  # [T, E]
+
+
+def rope_at(first_pos: int) -> (cos: Tensor, sin: Tensor):
+    # out: cos, sin each [T, hs/2], for positions first_pos .. first_pos + T - 1
+    cos, sin = rope_angles(first_pos + T, head_size=E, device=torch.device("cpu"))
+    return (cos=cos[first_pos:], sin=sin[first_pos:])
+
+
+def test_attention_without_positions_only_reorders_its_outputs():
+    w = random_qkv()
+    x = torch.randn(T, E)
+    out = one_head_attention(x, w, causal=False)
+    out_of_reversed = one_head_attention(x[reverse], w, causal=False)
+    # each token gets the same vector in either order, so "dog bites man" and
+    # "man bites dog" are the same set of vectors
+    assert torch.allclose(out_of_reversed, out[reverse], atol=1e-6)
+
+
+def test_causal_attention_without_positions_gives_the_last_token_a_bag_of_words():
+    w = random_qkv()
+    x = torch.randn(T, E)
+    # tokens 0 .. 4 reversed, the last token kept last
+    last = T - 1
+    shuffled = torch.cat([torch.arange(last).flip(0), torch.tensor([last])])
+    out = one_head_attention(x, w, causal=True)
+    out_of_shuffled = one_head_attention(x[shuffled], w, causal=True)
+    # the last token sees every token and can't tell their order. the mask is
+    # itself a weak position signal, because row t averages t + 1 tokens, but
+    # it says nothing about the order of the tokens a row sees
+    assert torch.allclose(out_of_shuffled[last], out[last], atol=1e-6)
+
+
+def test_a_position_table_makes_order_matter():
+    w = random_qkv()
+    x = torch.randn(T, E)
+    pos_emb = torch.randn(T, E)  # [T, E], a learned table, random here
+    out = one_head_attention(x + pos_emb, w, causal=False)
+    out_of_reversed = one_head_attention(x[reverse] + pos_emb, w, causal=False)
+    assert not torch.allclose(out_of_reversed, out[reverse], atol=1e-3)
+
+
+def test_rope_makes_order_matter():
+    w = random_qkv()
+    x = torch.randn(T, E)
+    rope = rope_at(0)
+    out = one_head_attention(x, w, causal=False, rope=)
+    out_of_reversed = one_head_attention(x[reverse], w, causal=False, rope=)
+    assert not torch.allclose(out_of_reversed, out[reverse], atol=1e-3)
+
+
+def test_a_position_table_sees_where_a_phrase_is():
+    w = random_qkv()
+    x = torch.randn(T, E)
+    pos_emb = torch.randn(shift + T, E)  # [shift + T, E]
+    out_at_0 = one_head_attention(x + pos_emb[:T], w, causal=True)
+    out_at_shift = one_head_attention(x + pos_emb[shift:], w, causal=True)
+    # the same phrase gets different vectors at positions 0 .. 5 and 100 .. 105
+    assert not torch.allclose(out_at_shift, out_at_0, atol=1e-3)
+
+
+def test_rope_sees_only_how_far_apart_tokens_are():
+    w = random_qkv()
+    x = torch.randn(T, E)
+    out_at_0 = one_head_attention(x, w, causal=True, rope=rope_at(0))
+    out_at_shift = one_head_attention(x, w, causal=True, rope=rope_at(shift))
+    # moving every token by the same amount keeps each distance m - n, so every
+    # score and the output are unchanged. the tolerance is for fp32 cos and sin
+    # of angles near 100
+    assert torch.allclose(out_at_shift, out_at_0, atol=1e-4)
