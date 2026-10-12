@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor, nn
 
-from model import GPT, GPTConfig, apply_rope, rope_angles
+from model import GPT, GPTConfig, RopeRotation, apply_rope, rope_rotation
 from train import lr_at
 
 
@@ -199,26 +199,27 @@ def one_head_attention(
     w: QKVWeights,
     *,
     causal: bool,
-    rope: (cos: Tensor, sin: Tensor) | None = None,
+    rotation: RopeRotation | None = None,
 ) -> Tensor:
     # x: [T, E]
     # out: [T, E]
-    # rope, when given, rotates q and k by their positions as FlashAttention does
+    # rotation, when given, rotates q and k by their positions as FlashAttention does
     (wq=, wk=, wv=) = w
     q = rearrange(x @ wq, "T hs -> 1 1 T hs")  # [1, 1, T, hs], apply_rope's layout
     k = rearrange(x @ wk, "T hs -> 1 1 T hs")
     v = rearrange(x @ wv, "T hs -> 1 1 T hs")
-    if rope is not None:
-        (cos=, sin=) = rope
-        q = apply_rope(q, cos, sin)
-        k = apply_rope(k, cos, sin)
+    if rotation is not None:
+        q = apply_rope(q, rotation)
+        k = apply_rope(k, rotation)
     out = F.scaled_dot_product_attention(q, k, v, is_causal=causal)
     return out[0, 0]  # [T, E]
 
 
-def rope_at(first_pos: int) -> (cos: Tensor, sin: Tensor):
+def rotation_at(first_pos: int) -> RopeRotation:
     # out: cos, sin each [T, hs/2], for positions first_pos .. first_pos + T - 1
-    cos, sin = rope_angles(first_pos + T, head_size=E, device=torch.device("cpu"))
+    (cos=, sin=) = rope_rotation(
+        first_pos + T, head_size=E, device=torch.device("cpu")
+    )
     return (cos=cos[first_pos:], sin=sin[first_pos:])
 
 
@@ -258,9 +259,9 @@ def test_a_position_table_makes_order_matter():
 def test_rope_makes_order_matter():
     w = random_qkv()
     x = torch.randn(T, E)
-    rope = rope_at(0)
-    out = one_head_attention(x, w, causal=False, rope=)
-    out_of_reversed = one_head_attention(x[reverse], w, causal=False, rope=)
+    rotation = rotation_at(0)
+    out = one_head_attention(x, w, causal=False, rotation=)
+    out_of_reversed = one_head_attention(x[reverse], w, causal=False, rotation=)
     assert not torch.allclose(out_of_reversed, out[reverse], atol=1e-3)
 
 
@@ -277,8 +278,8 @@ def test_a_position_table_sees_where_a_phrase_is():
 def test_rope_sees_only_how_far_apart_tokens_are():
     w = random_qkv()
     x = torch.randn(T, E)
-    out_at_0 = one_head_attention(x, w, causal=True, rope=rope_at(0))
-    out_at_shift = one_head_attention(x, w, causal=True, rope=rope_at(shift))
+    out_at_0 = one_head_attention(x, w, causal=True, rotation=rotation_at(0))
+    out_at_shift = one_head_attention(x, w, causal=True, rotation=rotation_at(shift))
     # moving every token by the same amount keeps each distance m - n, so every
     # score and the output are unchanged. the tolerance is for fp32 cos and sin
     # of angles near 100
