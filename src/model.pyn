@@ -28,10 +28,12 @@ class ResidualProj(nn.Linear):
 
 ROPE_BASE = 10000.0  # the RoFormer paper's; sets the slowest pair's wavelength
 
+# the entries of the 2x2 rotation each pair gets, both [T, hs/2]. A record, so
+# the two same-typed tensors can't be swapped
+type RopeRotation = (cos: Tensor, sin: Tensor)
 
-def rope_angles(
-    T: int, *, head_size: int, device: torch.device
-) -> tuple[Tensor, Tensor]:
+
+def rope_rotation(T: int, *, head_size: int, device: torch.device) -> RopeRotation:
     # out: cos, sin each [T, hs/2], of pos * theta_i for pos 0 .. T-1
     # one angle per pair of dims, theta_i = base^(-2i/hs) from 1 down to ~1/base,
     # so early pairs turn fast with position and late pairs slowly
@@ -44,15 +46,15 @@ def rope_angles(
     # fp32 even under autocast, which matters because bf16 can't hold an angle
     # like 127.3 (its step there is 0.5)
     angles = rearrange(pos, "T -> T 1") * theta  # [T, hs/2]
-    return angles.cos(), angles.sin()
+    return (cos=angles.cos(), sin=angles.sin())
 
 
-def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+def apply_rope(x: Tensor, rotation: RopeRotation) -> Tensor:
     # x: [B, nh, T, hs]
-    # cos, sin: [T, hs/2]
     # out: [B, nh, T, hs]
     # rotates each pair (x[2i], x[2i+1]) at position t by the angle t * theta_i,
     # the paper's 2x2 rotation
+    (cos=, sin=) = rotation  # each [T, hs/2]
     x1 = x[..., 0::2]  # [B, nh, T, hs/2], the first of each pair
     x2 = x[..., 1::2]  # the second of each pair
     out = torch.empty_like(x)
@@ -73,9 +75,8 @@ class FlashAttention(nn.Module):
         self.proj = ResidualProj(n_embed, n_embed)
         self.resid_dropout = nn.Dropout(dropout)
 
-    def forward(self, x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+    def forward(self, x: Tensor, rotation: RopeRotation) -> Tensor:
         # x: [B, T, E]
-        # cos, sin: [T, hs/2]
         # out: [B, T, E]
         # project to Q, K, V in one matmul, then split into heads
         qkv: Tensor = self.qkv(x)  # [B, T, 3E]
@@ -84,8 +85,8 @@ class FlashAttention(nn.Module):
         )
         # position enters only here: q and k are rotated by their own positions,
         # so the score q_m . k_n depends on the distance m - n. v isn't rotated
-        q = apply_rope(q, cos, sin)
-        k = apply_rope(k, cos, sin)
+        q = apply_rope(q, rotation)
+        k = apply_rope(k, rotation)
         # fused causal attention (flash kernel on GPU), which never materializes the
         # [B, nh, T, T] score matrix; default scale is 1/sqrt(hs).
         # a function, not a module, so it can't see eval(); turn dropout off by hand
@@ -126,13 +127,12 @@ class Block(nn.Module):
         self.attn = FlashAttention(n_embed=, n_head=, dropout=)
         self.ffwd = FeedForward(n_embed=, dropout=)
 
-    def forward(self, x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+    def forward(self, x: Tensor, rotation: RopeRotation) -> Tensor:
         # x: [B, T, E]
-        # cos, sin: [T, hs/2]
         # out: [B, T, E]
         # pre-norm residuals: x + sublayer(norm(x)), so x itself is never normalized
         h: Tensor = self.norm1(x)
-        x = x + self.attn(h, cos, sin)  # tokens exchange information
+        x = x + self.attn(h, rotation)  # tokens exchange information
         h = self.norm2(x)
         x = x + self.ffwd(h)  # each token processed on its own
         return x
@@ -191,9 +191,9 @@ class GPT(nn.Module):
         tok_emb: Tensor = self.token_embedding_table(idx)  # [B, T, E]
         x: Tensor = self.emb_dropout(tok_emb)
         # computed once, shared by every layer
-        cos, sin = rope_angles(T, head_size=self.head_size, device=idx.device)
+        rotation = rope_rotation(T, head_size=self.head_size, device=idx.device)
         for block in self.blocks:
-            x = block(x, cos, sin)
+            x = block(x, rotation)
         # final norm, then a score per vocab token at every position.
         # logits[b, t] predicts the next token after idx[b, t]
         x = self.norm_f(x)

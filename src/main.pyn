@@ -27,7 +27,7 @@ if __name__ == "__main__":
         dropout=0.2,
     )
     train_cfg: TrainConfig = (
-        batch_size=64, max_steps=5000,
+        batch_size=64, max_steps=1000,
         max_lr=1e-3, min_lr=1e-4,
         weight_decay=0.1,
         grad_clip=1.0,
@@ -36,6 +36,10 @@ if __name__ == "__main__":
         eval_iters=20,
     )
     model = GPT(gpt_cfg).to(device)
+    if device == "cuda":
+        # in place, so model stays a GPT and state_dict keys get no _orig_mod.
+        # prefix, so the checkpoint loads into a plain GPT
+        model.compile()
     ckpt_path = CKPT_DIR / "main.pt"
     # every hyperparameter, for wandb's config table
     config = {**gpt_cfg, **train_cfg}

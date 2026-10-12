@@ -9,7 +9,7 @@ from torch import Tensor, nn
 
 from model import (
     GPT, Block, FeedForward, FlashAttention, GPTConfig,
-    ResidualProj, apply_rope, rope_angles,
+    ResidualProj, apply_rope, rope_rotation,
 )
 
 
@@ -88,9 +88,9 @@ def rotated_at_every_position(v: Tensor, *, T: int) -> Tensor:
     # v: [hs]
     # out: [T, hs], row t is v rotated as if it sat at position t
     (hs,) = v.shape
-    cos, sin = rope_angles(T, head_size=hs, device=v.device)  # each [T, hs/2]
+    rotation = rope_rotation(T, head_size=hs, device=v.device)
     x = v.expand(1, 1, T, hs)  # [B, nh, T, hs], the same v at every position
-    return apply_rope(x, cos, sin)[0, 0]
+    return apply_rope(x, rotation)[0, 0]
 
 
 def test_rope_score_depends_only_on_distance():
@@ -126,14 +126,16 @@ def test_rope_keeps_lengths():
 
 def test_rope_needs_an_even_head_size():
     with pytest.raises(AssertionError, match="head_size 5 is odd"):
-        rope_angles(4, head_size=5, device=torch.device("cpu"))
+        rope_rotation(4, head_size=5, device=torch.device("cpu"))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="bf16 autocast is GPU-only")
 def test_rope_angles_stay_fp32_under_autocast():
     # bf16's step near 127 is 0.5, so a bf16 angle would be off by up to 0.25 rad
     with torch.autocast("cuda", dtype=torch.bfloat16):
-        cos, sin = rope_angles(128, head_size=32, device=torch.device("cuda"))
+        (cos=, sin=) = rope_rotation(
+            128, head_size=32, device=torch.device("cuda")
+        )
     assert cos.dtype == sin.dtype == torch.float32
 
 
