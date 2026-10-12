@@ -68,9 +68,10 @@ def test_a_checkpoint_missing_a_config_field_is_rejected(
     model: GPT, cfg: GPTConfig, ckpt_path: Path
 ):
     # as if saved before GPTConfig had dropout
+    (dropout=_, **old_cfg) = cfg  # every field but dropout
     save_checkpoint(ckpt_path, model, cfg, step=0, val_loss=0.0)
     ckpt: dict[str, Any] = torch.load(ckpt_path, weights_only=True)
-    del ckpt["gpt_cfg"]["dropout"]
+    ckpt["gpt_cfg"] = old_cfg._asdict()
     torch.save(ckpt, ckpt_path)
     with pytest.raises(TypeError, match="missing field 'dropout'"):
         load_checkpoint(ckpt_path)
