@@ -12,7 +12,7 @@ from torch import Tensor
 from data import split
 from logger import EvalRow, Run
 from model import GPT
-from train import TrainConfig, train
+from train import TrainConfig, flat_config, train
 
 
 def read_lines(run: Run) -> list[dict[str, Any]]:
@@ -69,15 +69,14 @@ def test_exiting_the_block_finishes_the_run(tmp_path: Path):
 
 def test_train_logs_every_eval_and_a_summary(model: GPT, ids: Tensor, tmp_path: Path):
     train_cfg: TrainConfig = (
-        batch_size=16, max_steps=60,
-        max_lr=1e-2, min_lr=1e-3,
+        batch_size=16,
+        schedule=(warmup_steps=5, max_steps=60, max_lr=1e-2, min_lr=1e-3),
         weight_decay=0.1,
         grad_clip=1.0,
-        warmup_steps=5,
         eval_interval=20,
         eval_iters=5,
     )
-    with Run("test", dict(train_cfg), online=False, log_dir=tmp_path) as run:
+    with Run("test", flat_config(train_cfg), online=False, log_dir=tmp_path) as run:
         history = train(model, data=split(ids), train_cfg=, run=)
     _, *logs, summary, _ = read_lines(run)
     # one line per history row, same step and val loss

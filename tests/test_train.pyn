@@ -10,6 +10,7 @@ from torch import Tensor
 from data import get_batch, split
 from model import GPT, GPTConfig
 from train import (
+    Schedule,
     TrainConfig,
     autocast,
     batch_loss,
@@ -125,7 +126,7 @@ def test_evaluation_restores_mode(model: GPT, ids: Tensor, training: bool):
 
 # lr_at's schedule, passed as schedule=lr_cfg. Steps 0 .. 99 run, with warmup
 # on 0 .. 4 and decay on 5 .. 99
-lr_cfg = (warmup_steps=5, max_steps=100, max_lr=1e-2, min_lr=1e-3)
+lr_cfg: Schedule = (warmup_steps=5, max_steps=100, max_lr=1e-2, min_lr=1e-3)
 
 
 def test_warmup_starts_at_one_step_and_reaches_max_lr():
@@ -224,7 +225,7 @@ def left_after_decay(lrs: list[float], *, weight_decay: float) -> float:
 # explaination in src/notes/weight_decay.md
 def test_decay_alone_shrinks_a_weight_by_24_percent_over_mains_run():
     # main's schedule and weight decay
-    schedule = (warmup_steps=100, max_steps=5000, max_lr=1e-3, min_lr=1e-4)
+    schedule: Schedule = (warmup_steps=100, max_steps=5000, max_lr=1e-3, min_lr=1e-4)
     weight_decay = 0.1
     lrs = [lr_at(s, schedule=) for s in range(schedule.max_steps)]
     left = left_after_decay(lrs, weight_decay=)
@@ -279,11 +280,10 @@ def test_train_step_leaves_a_short_gradient_alone(
 
 # a short run on the trivially learnable ids
 train_cfg: TrainConfig = (
-    batch_size=16, max_steps=60,
-    max_lr=1e-2, min_lr=1e-3,
+    batch_size=16,
+    schedule=(warmup_steps=5, max_steps=60, max_lr=1e-2, min_lr=1e-3),
     weight_decay=0.1,
     grad_clip=1.0,
-    warmup_steps=5,
     eval_interval=20,
     eval_iters=5,
 )
@@ -291,7 +291,7 @@ train_cfg: TrainConfig = (
 
 def test_history_has_one_entry_per_eval(model: GPT, ids: Tensor):
     history = train(model, data=split(ids), train_cfg=)
-    (max_steps=, eval_interval=) = train_cfg
+    (schedule=(max_steps=), eval_interval=) = train_cfg
     # every eval_interval steps inside the loop, then once more after the last step
     eval_steps = [*range(0, max_steps, eval_interval), max_steps]
     assert [h.step for h in history] == eval_steps
@@ -315,11 +315,11 @@ def test_training_lowers_val_loss(model: GPT, ids: Tensor):
 def test_train_steps_with_the_scheduled_lr(model: GPT, ids: Tensor):
     # each eval records the lr the optimizer used for its latest step
     history = train(model, data=split(ids), train_cfg=)
-    (max_steps=, eval_interval=) = train_cfg
+    (schedule=(max_steps=), eval_interval=) = train_cfg
     # an eval inside the loop follows setting its step's lr; the final eval, after
     # the loop, still holds the last step's (max_steps - 1)
     lr_steps = [*range(0, max_steps, eval_interval), max_steps - 1]
-    expected = [lr_at(s, schedule=train_cfg) for s in lr_steps]
+    expected = [lr_at(s, schedule=train_cfg.schedule) for s in lr_steps]
     assert [h.lr for h in history] == pytest.approx(expected)
     # the same in numbers: warmup 5 steps to 1e-2, then cosine down to exactly
     # min_lr (1e-3) on step 59, the last step
@@ -333,11 +333,12 @@ def test_the_last_eval_holds_the_last_steps_lr_not_the_last_evals(
 ):
     # 19 steps, an eval every 4. Evals at 16 and 19 are 3 steps apart, but their
     # lrs are steps 16 and 18, because the final eval sees the last step's lr (18)
-    short_cfg = train_cfg._replace(max_steps=19, eval_interval=4)
+    short_schedule = train_cfg.schedule._replace(max_steps=19)
+    short_cfg = train_cfg._replace(schedule=short_schedule, eval_interval=4)
     history = train(model, data=split(ids), train_cfg=short_cfg)
     assert [h.step for h in history] == [0, 4, 8, 12, 16, 19]
     lr_steps = [0, 4, 8, 12, 16, 18]
-    expected = [lr_at(s, schedule=short_cfg) for s in lr_steps]
+    expected = [lr_at(s, schedule=short_schedule) for s in lr_steps]
     lrs = [h.lr for h in history]
     assert lrs == pytest.approx(expected)
     # in numbers: step 4 ends the 5-step warmup at 1e-2, then the decay reaches

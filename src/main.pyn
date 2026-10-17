@@ -9,7 +9,7 @@ from logger import Run
 from model import GPT
 from paths import CKPT_DIR, SHAKESPEARE
 from tokenizer import CharTokenizer
-from train import TrainConfig, train
+from train import TrainConfig, flat_config, train
 
 if __name__ == "__main__":
     torch.manual_seed(1337)
@@ -27,11 +27,10 @@ if __name__ == "__main__":
         dropout=0.2,
     )
     train_cfg: TrainConfig = (
-        batch_size=64, max_steps=1000,
-        max_lr=1e-3, min_lr=1e-4,
+        batch_size=64,
+        schedule=(warmup_steps=100, max_steps=1000, max_lr=1e-3, min_lr=1e-4),
         weight_decay=0.1,
         grad_clip=1.0,
-        warmup_steps=100,
         eval_interval=250,
         eval_iters=20,
     )
@@ -42,7 +41,7 @@ if __name__ == "__main__":
         model.compile()
     ckpt_path = CKPT_DIR / "main.pt"
     # every hyperparameter, for wandb's config table
-    config = {**gpt_cfg, **train_cfg}
+    config = {**gpt_cfg, **flat_config(train_cfg)}
     with Run("main", config) as run:
         train(
             model, data=, train_cfg=,
