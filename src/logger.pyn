@@ -8,7 +8,7 @@ import time
 import traceback
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Final, TextIO
+from typing import Any, Final, Self, TextIO
 
 import torch
 import wandb
@@ -174,7 +174,7 @@ class Run:
         sys.stdout = self.terminal
         self.log_file.close()
 
-    def __enter__(self) -> "Run":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
