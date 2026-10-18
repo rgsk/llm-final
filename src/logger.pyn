@@ -8,7 +8,7 @@ import time
 import traceback
 from pathlib import Path
 from types import TracebackType
-from typing import Any, TextIO
+from typing import Any, Final, TextIO
 
 import torch
 import wandb
@@ -104,7 +104,7 @@ class Run:
         *,
         elapsed_s: float,
     ):
-        (step=, lr=, train_loss=, val_loss=, grad_norm=) = row
+        (step=, lr=, train_loss=, val_loss=, grad_norm=): Final = row
         # namespaced names, so wandb groups loss/*, grad/*, time/* and memory/* into
         # sections. Not system/*, because that section charts only the metrics
         # wandb collects itself

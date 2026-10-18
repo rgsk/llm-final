@@ -4,7 +4,7 @@
 # dropout (training only) on the embeddings, the attention weights and each
 # sublayer's output before it joins the residual stream
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import torch
 import torch.nn.functional as F
@@ -144,7 +144,7 @@ class GPT(nn.Module):
         (
             vocab_size=, block_size=, n_embed=,
             n_head=, n_layer=, dropout=,
-        ) = cfg
+        ): Final = cfg
         self.n_layer = n_layer
         self.block_size = block_size
         self.head_size = n_embed // n_head
