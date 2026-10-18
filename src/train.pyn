@@ -43,17 +43,6 @@ def lr_at(step: int, *, schedule: Schedule) -> float:
     return min_lr + cosine * (max_lr - min_lr)
 
 
-def flat_config(train_cfg: TrainConfig) -> dict[str, Any]:
-    # every setting at the top level, the schedule's fields included, for the
-    # run log and wandb, which write plain JSON. _asdict() would keep schedule
-    # as a record, which json.dumps can't write
-    # TODO: remove once byname can turn nested records into plain dicts, which
-    # _asdict() doesn't because it's shallow (pending byname feedback). Then
-    # pass that to Run instead
-    (schedule=, **rest) = train_cfg
-    return {**rest, **schedule}
-
-
 def param_groups(model: GPT, *, weight_decay: float) -> list[dict[str, Any]]:
     # AdamW's groups, split as in GPT-2 and nanoGPT. The matrices (linear and
     # embedding weights) decay; the vectors (biases, the norms' scales)

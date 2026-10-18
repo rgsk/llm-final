@@ -7,12 +7,13 @@ from typing import Any
 
 import pytest
 import wandb
+from byname import deepdict
 from torch import Tensor
 
 from data import split
 from logger import EvalRow, Run
 from model import GPT
-from train import TrainConfig, flat_config, train
+from train import TrainConfig, train
 
 
 def read_lines(run: Run) -> list[dict[str, Any]]:
@@ -76,7 +77,7 @@ def test_train_logs_every_eval_and_a_summary(model: GPT, ids: Tensor, tmp_path: 
         eval_interval=20,
         eval_iters=5,
     )
-    with Run("test", flat_config(train_cfg), online=False, log_dir=tmp_path) as run:
+    with Run("test", deepdict(train_cfg), online=False, log_dir=tmp_path) as run:
         history = train(model, data=split(ids), train_cfg=, run=)
     _, *logs, summary, _ = read_lines(run)
     # one line per history row, same step and val loss
