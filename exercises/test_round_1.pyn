@@ -1,8 +1,9 @@
 # round 1: parameter counts, the lr schedule, causal attention, softmax and
 # cross entropy by hand. replace each ___ with your answer, worked out on paper
 # before running, and fill in my_attention, my_softmax and my_cross_entropy
-# until their tests pass. the last section, why attention needs positions and
-# how a position table and RoPE give them, is worked out already
+# until their tests pass. the last two sections, why attention needs positions and
+# how a position table and RoPE give them, and why stacked linear layers need an
+# activation between them, are worked out already
 import torch
 import torch.nn.functional as F
 from einops import rearrange
@@ -14,6 +15,11 @@ from train import lr_at
 
 def n_params(module: nn.Module) -> int:
     return sum(p.numel() for p in module.parameters())
+
+
+# ==============================================================================
+# parameter counts
+# ==============================================================================
 
 
 def test_predict_param_counts():
@@ -46,6 +52,11 @@ def test_predict_param_counts():
     assert n_params(model) == total
 
 
+# ==============================================================================
+# lr schedule
+# ==============================================================================
+
+
 def test_predict_lr_schedule():
     warmup_steps = 4
     max_steps = 10
@@ -57,6 +68,11 @@ def test_predict_lr_schedule():
     assert lr_at(4, schedule=) == max_lr
     assert lr_at(9, schedule=) == min_lr
     assert lr_at(10, schedule=) == min_lr
+
+
+# ==============================================================================
+# causal attention
+# ==============================================================================
 
 
 def my_attention(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
@@ -82,6 +98,11 @@ def test_my_attention_matches_sdpa():
     v = torch.randn(B, nh, T, hs)
     expected = F.scaled_dot_product_attention(q, k, v, is_causal=True)
     assert torch.allclose(my_attention(q, k, v), expected, atol=1e-6)
+
+
+# ==============================================================================
+# softmax
+# ==============================================================================
 
 
 def softmax_simple(x: Tensor, dim: int = -1) -> Tensor:
@@ -120,6 +141,11 @@ def test_softmax_simple_matches_torch_until_exp_overflows():
     big_logits = logits * 1000
     assert torch.isfinite(F.softmax(big_logits, dim=-1)).all()
     assert softmax_simple(big_logits, dim=-1).isnan().any()
+
+
+# ==============================================================================
+# cross entropy
+# ==============================================================================
 
 
 def cross_entropy_simple(logits: Tensor, targets: Tensor) -> Tensor:
@@ -176,7 +202,11 @@ def test_cross_entropy_simple_matches_torch_until_probs_underflow():
     assert cross_entropy_simple(big_logits, targets) == torch.inf
 
 
-# attention and positions. one head with hs = E, so x needs no head split
+# ==============================================================================
+# attention with no positions, with a position table, and with RoPE
+# ==============================================================================
+
+# one head with hs = E, so x needs no head split
 T, E = 6, 8
 reverse = torch.arange(T).flip(0)  # token order 5 .. 0
 shift = 100  # positions 100 .. 105 in place of 0 .. 5
@@ -284,3 +314,122 @@ def test_rope_sees_only_how_far_apart_tokens_are():
     # score and the output are unchanged. the tolerance is for fp32 cos and sin
     # of angles near 100
     assert torch.allclose(out_at_shift, out_at_0, atol=1e-4)
+
+
+# ==============================================================================
+# stacked linear layers and activations
+# ==============================================================================
+
+# simple explaination in src/notes/relu.ipynb
+
+
+# a linear layer is x @ W.T + b, and a linear layer of a linear layer is still
+# one, so depth without an activation adds parameters but no expressive power
+def merged_linear(up: nn.Linear, down: nn.Linear) -> nn.Linear:
+    # down(up(x)) = (x @ W1.T + b1) @ W2.T + b2
+    #             = x @ (W2 @ W1).T + (W2 @ b1 + b2)
+    merged = nn.Linear(up.in_features, down.out_features)
+    with torch.no_grad():
+        merged.weight.copy_(down.weight @ up.weight)  # [out, in]
+        merged.bias.copy_(down.weight @ up.bias + down.bias)  # [out]
+    return merged
+
+
+def test_stacked_linear_layers_collapse_into_one_smaller_layer():
+    N, E, H = 5, 8, 32
+    up = nn.Linear(E, H)
+    down = nn.Linear(H, E)
+    merged = merged_linear(up, down)
+    x = torch.randn(N, E)
+    assert torch.allclose(merged(x), down(up(x)), atol=1e-5)
+    # the E -> H -> E stack is an E -> E layer with far fewer parameters
+    stacked_params = (E * H + H) + (H * E + E)
+    merged_params = E * E + E
+    assert n_params(up) + n_params(down) == stacked_params
+    assert n_params(merged) == merged_params
+    assert merged_params < stacked_params
+
+
+def test_relu_between_the_layers_breaks_the_collapse():
+    N, E, H = 5, 8, 32
+    up = nn.Linear(E, H)
+    down = nn.Linear(H, E)
+    merged = merged_linear(up, down)
+    x = torch.randn(N, E)
+    y = torch.randn(N, E)
+    zero = torch.zeros(N, E)
+    with_relu: Tensor = down(F.relu(up(x)))
+    # relu zeroes the negative entries of up(x), so the products no longer
+    # multiply out into one weight
+    assert not torch.allclose(with_relu, merged(x), atol=1e-3)
+    # any linear layer f has f(x) + f(y) == f(0) + f(x + y), because both sides
+    # are (x + y) @ W.T + 2 * b. the relu stack breaks this, so no single
+    # linear layer reproduces it, however big
+    assert torch.allclose(
+        merged(x) + merged(y), merged(zero) + merged(x + y), atol=1e-5
+    )
+
+    def relu_stack(x: Tensor) -> Tensor:
+        return down(F.relu(up(x)))
+
+    assert not torch.allclose(
+        relu_stack(x) + relu_stack(y), relu_stack(zero) + relu_stack(x + y), atol=1e-3
+    )
+
+
+def test_relu_lets_two_layers_compute_abs():
+    # |x| = relu(x) + relu(-x). up makes [x, -x], down sums them
+    up = nn.Linear(1, 2, bias=False)
+    down = nn.Linear(2, 1, bias=False)
+    with torch.no_grad():
+        up.weight.copy_(torch.tensor([[1.0], [-1.0]]))  # [2, 1]
+        down.weight.copy_(torch.tensor([[1.0, 1.0]]))  # [1, 2]
+    x = torch.linspace(-3, 3, steps=7).unsqueeze(-1)  # [7, 1]
+    # without relu the two halves cancel, x - x == 0
+    assert torch.equal(down(up(x)), torch.zeros_like(x))
+    # with relu each half keeps only its positive side, and they add to |x|
+    assert torch.equal(down(F.relu(up(x))), x.abs())
+    # no linear layer gives |x|, because f(1) + f(-1) == 2 * f(0) for every
+    # linear f, while |1| + |-1| == 2 and 2 * |0| == 0
+    one = torch.tensor([1.0])
+    assert (one.abs() + (-one).abs()).item() != 2 * torch.zeros(1).abs().item()
+
+
+def test_relu_bias_decides_where_each_neuron_turns_on():
+    # neuron i is relu(x + bias_i), so it is off while x <= -bias_i and on
+    # (slope 1) after. bias -2 keeps it off up to x = 2, bias 2 has it on
+    # from x = -1. down scales each by slope_change_i, so the slope changes by
+    # slope_change_i where neuron i turns on
+    biases = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
+    slope_changes = torch.tensor([2.0, -2.0, 2.0, -2.0, 1.0])
+    up = nn.Linear(1, 5)
+    down = nn.Linear(5, 1, bias=False)
+    with torch.no_grad():
+        up.weight.copy_(torch.ones(5, 1))  # [5, 1]
+        up.bias.copy_(biases)  # [5]
+        down.weight.copy_(slope_changes.unsqueeze(0))  # [1, 5]
+    x = torch.arange(-2.0, 3.0).unsqueeze(-1)  # [5, 1], x = -2, -1, 0, 1, 2
+    # one row per x, one column per bias -2, -1, 0, 1, 2
+    hidden = F.relu(up(x))  # [5, 5]
+    expected_hidden = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 0.0, 0.0],  # x = -2, all off
+            [0.0, 0.0, 0.0, 0.0, 1.0],  # x = -1, bias 2 on
+            [0.0, 0.0, 0.0, 1.0, 2.0],  # x = 0, bias 1 and up on
+            [0.0, 0.0, 1.0, 2.0, 3.0],  # x = 1, bias 0 and up on
+            [0.0, 1.0, 2.0, 3.0, 4.0],  # x = 2, bias -1 and up on, bias -2 still off
+        ]
+    )
+    assert torch.equal(hidden, expected_hidden)
+    # 2 * col 1 - 2 * col 2 + 2 * col 3 - 2 * col 4 + 1 * col 5, row by row
+    #   x = -2, 0
+    #   x = -1, 1
+    #   x =  0, -2 + 2 = 0
+    #   x =  1, 2 - 4 + 3 = 1
+    #   x =  2, -2 + 4 - 6 + 4 = 0
+    # so a zigzag, each neuron turning on flips the slope
+    expected = torch.tensor([[0.0], [1.0], [0.0], [1.0], [0.0]])  # [5, 1]
+    assert torch.equal(down(hidden), expected)
+    # without relu every neuron is on everywhere, and they sum to one line,
+    # 2(x - 2) - 2(x - 1) + 2x - 2(x + 1) + (x + 2) == x - 2
+    assert torch.equal(down(up(x)), x - 2)
