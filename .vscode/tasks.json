@@ -10,14 +10,15 @@
     "presentation": {
         "reveal": "always",
         "panel": "dedicated",
-        "clear": true
+        "clear": true,
+        "showReuseMessage": false
     },
     "tasks": [
         {
             "label": "check: current file",
             "detail": "annotation-check on the open .pyn (../ml-tools: any-check plus redundant and untyped annotations); alt+l runs it",
             "type": "shell",
-            "command": "F=$(echo '${file}' | cut -d'#' -f1); echo \"checking $F\"; echo; case \"$F\" in *.pyn) ;; *) echo 'not a .pyn file'; exit 0;; esac; echo '─── annotations (Any, redundant, untyped) ───'; uv run annotation-check \"$F\" && echo '✅ annotations ok'",
+            "command": "F=$(echo '${file}' | cut -d'#' -f1); echo \"checking $F\"; echo; case \"$F\" in *.pyn) ;; *) echo 'not a .pyn file'; exit 0;; esac; echo '─── annotations (Any, redundant, untyped) ───'; uv run annotation-check \"$F\" && echo '✅ annotations ok'; echo",
             "problemMatcher": []
         },
         {
